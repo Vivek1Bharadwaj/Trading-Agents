@@ -10,10 +10,8 @@ RUN npm install
 
 COPY frontend/ ./
 
-# Fix Vite executable permissions
-RUN chmod -R +x node_modules/.bin
-
-RUN npm run build
+# Run Vite directly through Node to avoid executable permission issues
+RUN node ./node_modules/vite/bin/vite.js build
 
 
 # Stage 2: Build Python backend
@@ -52,8 +50,6 @@ WORKDIR /home/appuser/app
 
 COPY --from=builder --chown=appuser:appuser /build .
 
-# Copy production frontend
 COPY --from=frontend-builder --chown=appuser:appuser /frontend/dist ./frontend/dist
 
-# Start FastAPI backend
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
