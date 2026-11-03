@@ -10,6 +10,9 @@ RUN npm install
 
 COPY frontend/ ./
 
+# Fix Vite executable permissions
+RUN chmod -R +x node_modules/.bin
+
 RUN npm run build
 
 
@@ -49,8 +52,8 @@ WORKDIR /home/appuser/app
 
 COPY --from=builder --chown=appuser:appuser /build .
 
-# Copy the built frontend into the production image
+# Copy production frontend
 COPY --from=frontend-builder --chown=appuser:appuser /frontend/dist ./frontend/dist
 
-# Start FastAPI
+# Start FastAPI backend
 CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
