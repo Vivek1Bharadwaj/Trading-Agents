@@ -1,3 +1,4 @@
+
 .git
 .venv
 .env
@@ -11,5 +12,14 @@ build
 dist
 results
 eval_results
+
+# Exclude local Node dependencies
+node_modules
+frontend/node_modules
+
+# Exclude generated frontend build
+frontend/dist
+
+# Exclude unnecessary Docker files
 Dockerfile
 docker-compose.yml
