@@ -7,6 +7,7 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
+from fastapi.staticfiles import StaticFiles
 
 from backend.schemas import ProviderInfo, ModelOptions, TickerValidation
 from backend.providers import get_providers, get_models_for_provider
@@ -101,3 +102,10 @@ app.add_api_websocket_route("/ws/analysis", websocket_analysis_route)
 if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
+
+# Serve React frontend
+app.mount(
+    "/",
+    StaticFiles(directory="frontend/dist", html=True),
+    name="frontend"
+)
