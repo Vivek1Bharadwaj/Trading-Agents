@@ -1,6 +1,18 @@
 import axios from 'axios';
+import { PROVIDERS } from './constants';
 
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:8000';
+const getBaseUrl = () => {
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL;
+    }
+    // When served from the backend (e.g. Render, production, or local host)
+    if (typeof window !== 'undefined' && window.location && window.location.origin) {
+        return window.location.origin;
+    }
+    return 'http://localhost:8000';
+};
+
+const API_URL = getBaseUrl();
 
 export const getModels = async (provider) => {
     try {
@@ -18,10 +30,13 @@ export const getModels = async (provider) => {
 export const getProviders = async () => {
     try {
         const response = await axios.get(`${API_URL}/api/providers`);
-        return response.data || [];
+        if (response.data && response.data.length > 0) {
+            return response.data;
+        }
+        return PROVIDERS;
     } catch (e) {
-        console.error("Failed to fetch providers", e);
-        return [];
+        console.error("Failed to fetch providers, falling back to static list", e);
+        return PROVIDERS;
     }
 };
 

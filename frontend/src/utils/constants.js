@@ -19,8 +19,24 @@ export const DEPTH_OPTIONS = [
 ];
 
 export const PROVIDERS = [
-  "OpenAI", "Google", "Anthropic", "xAI", "DeepSeek", "Qwen (International)", 
-  "Qwen (China)", "GLM (Z.AI)", "GLM (BigModel China)", "MiniMax (Global)", 
-  "MiniMax (China)", "OpenRouter", "Mistral", "Kimi (Moonshot)", "Groq", 
-  "NVIDIA NIM", "Azure OpenAI", "Amazon Bedrock", "Ollama", "OpenAI-compatible"
+  {"display": "OpenAI", "key": "openai", "url": "https://api.openai.com/v1", "env_var": "OPENAI_API_KEY"},
+  {"display": "Google", "key": "google", "url": null, "env_var": "GOOGLE_API_KEY"},
+  {"display": "Anthropic", "key": "anthropic", "url": "https://api.anthropic.com/", "env_var": "ANTHROPIC_API_KEY"},
+  {"display": "xAI", "key": "xai", "url": "https://api.x.ai/v1", "env_var": "XAI_API_KEY"},
+  {"display": "DeepSeek", "key": "deepseek", "url": "https://api.deepseek.com", "env_var": "DEEPSEEK_API_KEY"},
+  {"display": "Qwen (International)", "key": "qwen", "url": "https://dashscope-intl.aliyuncs.com/compatible-mode/v1", "env_var": "DASHSCOPE_API_KEY"},
+  {"display": "Qwen (China)", "key": "qwen-cn", "url": "https://dashscope.aliyuncs.com/compatible-mode/v1", "env_var": "DASHSCOPE_CN_API_KEY"},
+  {"display": "GLM (Z.AI)", "key": "glm", "url": "https://api.z.ai/api/paas/v4/", "env_var": "ZHIPU_API_KEY"},
+  {"display": "GLM (BigModel China)", "key": "glm-cn", "url": "https://open.bigmodel.cn/api/paas/v4/", "env_var": "ZHIPU_CN_API_KEY"},
+  {"display": "MiniMax (Global)", "key": "minimax", "url": "https://api.minimax.io/v1", "env_var": "MINIMAX_API_KEY"},
+  {"display": "MiniMax (China)", "key": "minimax-cn", "url": "https://api.minimaxi.com/v1", "env_var": "MINIMAX_CN_API_KEY"},
+  {"display": "OpenRouter", "key": "openrouter", "url": "https://openrouter.ai/api/v1", "env_var": "OPENROUTER_API_KEY"},
+  {"display": "Mistral", "key": "mistral", "url": "https://api.mistral.ai/v1", "env_var": "MISTRAL_API_KEY"},
+  {"display": "Kimi (Moonshot)", "key": "kimi", "url": "https://api.moonshot.ai/v1", "env_var": "MOONSHOT_API_KEY"},
+  {"display": "Groq", "key": "groq", "url": "https://api.groq.com/openai/v1", "env_var": "GROQ_API_KEY"},
+  {"display": "NVIDIA NIM", "key": "nvidia", "url": "https://integrate.api.nvidia.com/v1", "env_var": "NVIDIA_API_KEY"},
+  {"display": "Azure OpenAI", "key": "azure", "url": null, "env_var": "AZURE_OPENAI_API_KEY"},
+  {"display": "Amazon Bedrock", "key": "bedrock", "url": null, "env_var": null},
+  {"display": "Ollama", "key": "ollama", "url": "http://localhost:11434/v1", "env_var": null},
+  {"display": "OpenAI-compatible", "key": "openai_compatible", "url": null, "env_var": "OPENAI_API_KEY"}
 ];

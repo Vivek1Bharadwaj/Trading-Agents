@@ -1,8 +1,14 @@
 import { useState, useRef, useCallback } from 'react';
 
 const getWsUrl = () => {
-    const httpUrl = import.meta.env.VITE_API_URL || 'http://localhost:8000';
-    return httpUrl.replace(/^http/, 'ws') + '/ws/analysis';
+    if (import.meta.env.VITE_API_URL) {
+        return import.meta.env.VITE_API_URL.replace(/^http/, 'ws') + '/ws/analysis';
+    }
+    if (typeof window !== 'undefined' && window.location && window.location.host) {
+        const protocol = window.location.protocol === 'https:' ? 'wss:' : 'ws:';
+        return `${protocol}//${window.location.host}/ws/analysis`;
+    }
+    return 'ws://localhost:8000/ws/analysis';
 };
 
 export const useWebSocket = () => {

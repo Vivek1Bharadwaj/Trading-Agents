@@ -1,17 +1,17 @@
 import React, { useState, useEffect } from 'react';
-import { LANGUAGES, ANALYSTS, DEPTH_OPTIONS } from '../utils/constants';
+import { LANGUAGES, ANALYSTS, DEPTH_OPTIONS, PROVIDERS as FALLBACK_PROVIDERS } from '../utils/constants';
 import { isCrypto, validateTicker, getModels, getProviders } from '../utils/api';
 import { ChevronRight, ChevronLeft, Check, AlertCircle } from 'lucide-react';
 
 export default function SetupWizard({ configHook, onStart }) {
     const { config, updateConfig, step, nextStep, prevStep } = configHook;
     const [models, setModels] = useState({ quick: [], deep: [] });
-    const [providers, setProviders] = useState([]);
+    const [providers, setProviders] = useState(FALLBACK_PROVIDERS);
     const [error, setError] = useState('');
 
     useEffect(() => {
         getProviders().then(data => {
-            if (data.length > 0) {
+            if (data && data.length > 0) {
                 setProviders(data);
                 if (!config.provider) {
                     updateConfig('provider', data[0].key);
