@@ -42,10 +42,10 @@ class StatsCallbackHandler(BaseCallbackHandler):
         try:
             generation = response.generations[0][0]
         except (IndexError, TypeError):
-            return
+            generation = None
 
         usage_metadata = None
-        if hasattr(generation, "message"):
+        if generation and hasattr(generation, "message"):
             message = generation.message
             if isinstance(message, AIMessage) and hasattr(message, "usage_metadata"):
                 usage_metadata = message.usage_metadata
@@ -54,6 +54,11 @@ class StatsCallbackHandler(BaseCallbackHandler):
             with self._lock:
                 self.tokens_in += usage_metadata.get("input_tokens", 0)
                 self.tokens_out += usage_metadata.get("output_tokens", 0)
+        elif response.llm_output and "token_usage" in response.llm_output:
+            tu = response.llm_output["token_usage"]
+            with self._lock:
+                self.tokens_in += tu.get("prompt_tokens", 0) or tu.get("input_tokens", 0)
+                self.tokens_out += tu.get("completion_tokens", 0) or tu.get("output_tokens", 0)
 
     def on_tool_start(
         self,

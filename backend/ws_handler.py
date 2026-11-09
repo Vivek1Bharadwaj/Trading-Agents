@@ -7,7 +7,8 @@ import datetime
 import traceback
 import asyncio
 import logging
-from functools import partial
+import queue
+import threading
 
 from fastapi import WebSocket, WebSocketDisconnect
 
@@ -22,8 +23,9 @@ async def websocket_analysis_route(websocket: WebSocket):
 
     Protocol:
     1. Client connects and sends a JSON payload matching AnalysisRequest.
-    2. Server streams JSON messages as the graph executes.
-    3. Server sends a "complete" message when done, then closes.
+    2. Server streams real-time JSON messages as the graph executes (tool calls,
+       analyst messages, debate speeches, section previews, agent status updates).
+    3. Server sends a "complete" message when done, then cleanly finishes.
     """
     await websocket.accept()
 
@@ -51,18 +53,28 @@ async def websocket_analysis_route(websocket: WebSocket):
         # ── 3. Build the config dict for the graph ─────────────────────
         from tradingagents.default_config import DEFAULT_CONFIG
 
-        depth_map = {"Shallow": 1, "Medium": 3, "Deep": 5}
-        depth = depth_map.get(req.research_depth, 1)
+        # Calibrate debate/risk rounds by depth to prevent runaway token burn
+        depth_key = (req.research_depth or "shallow").strip().lower()
+        if depth_key == "deep":
+            max_debate_rounds = 2  # 2 Bull + 2 Bear = 4 turns
+            max_risk_rounds = 2    # 2 Aggressive + 2 Conservative + 2 Neutral = 6 turns
+        elif depth_key == "medium":
+            max_debate_rounds = 1  # 1 Bull + 1 Bear = 2 turns
+            max_risk_rounds = 2    # 2 Aggressive + 2 Conservative + 2 Neutral = 6 turns
+        else:  # shallow or fallback
+            max_debate_rounds = 1  # 1 Bull + 1 Bear = 2 turns
+            max_risk_rounds = 1    # 1 Aggressive + 1 Conservative + 1 Neutral = 3 turns
 
         config = DEFAULT_CONFIG.copy()
         config["llm_provider"] = req.llm_provider
         config["quick_think_llm"] = req.quick_think_llm
         config["deep_think_llm"] = req.deep_think_llm
         config["backend_url"] = req.backend_url
-        config["max_debate_rounds"] = depth
-        config["max_risk_discuss_rounds"] = depth
+        config["max_debate_rounds"] = max_debate_rounds
+        config["max_risk_discuss_rounds"] = max_risk_rounds
         config["output_language"] = req.output_language or "English"
         config["checkpoint_enabled"] = False
+        config["llm_max_retries"] = 5  # Enable exponential backoff retries for 429 rate limits
 
         if req.openai_reasoning_effort:
             config["openai_reasoning_effort"] = req.openai_reasoning_effort
@@ -77,7 +89,6 @@ async def websocket_analysis_route(websocket: WebSocket):
             "Sentiment Analyst": "social",
             "News Analyst": "news",
             "Fundamentals Analyst": "fundamentals",
-            # Also accept the raw keys directly
             "market": "market",
             "social": "social",
             "news": "news",
@@ -133,7 +144,7 @@ async def websocket_analysis_route(websocket: WebSocket):
             name = agent_display_map.get(key, key)
             await _send(websocket, "agent_update", {"agent": name, "status": "in_progress"})
 
-        # ── 6. Stream the graph execution ───────────────────────────────
+        # ── 6. Stream the graph execution in real-time ──────────────────
         start_time = time.time()
         report_sections = {}
         final_state = {}
@@ -141,136 +152,241 @@ async def websocket_analysis_route(websocket: WebSocket):
         try:
             init_state = graph.create_run_state(ticker, analysis_date, asset_type)
             args = graph.propagator.get_graph_args(callbacks=[stats_handler])
-            # Override stream_mode so tasks and values are both received
             args["stream_mode"] = ["values", "tasks"]
             args["subgraphs"] = True
 
             from tradingagents.dataflows.config import run_config_context
             context = run_config_context(config)
 
-            def _run_stream():
-                """Run the synchronous graph stream in a thread."""
-                nonlocal final_state
-                trace = []
-                stream = context.run(
-                    graph.graph.stream, init_state, **args,
-                )
-                try:
-                    while True:
-                        step = context.run(next, stream, None)
-                        if step is None:
-                            break
-                        trace.append(step)
-                finally:
-                    context.run(stream.close)
-                return trace
+            event_queue = queue.Queue()
 
-            # Run the blocking graph in a thread, periodically sending updates
-            loop = asyncio.get_event_loop()
-            stream_task = loop.run_in_executor(None, _run_stream)
-
-            # Poll for stats updates while the stream runs
-            while not stream_task.done():
-                elapsed = time.time() - start_time
+            def _stream_worker():
+                """Worker thread that executes the synchronous graph stream."""
                 try:
-                    stats = {
-                        "llm_calls": getattr(stats_handler, "llm_call_count", 0),
-                        "tool_calls": getattr(stats_handler, "tool_call_count", 0),
+                    stream = context.run(graph.graph.stream, init_state, **args)
+                    try:
+                        while True:
+                            step = context.run(next, stream, None)
+                            if step is None:
+                                break
+                            event_queue.put(("step", step))
+                    finally:
+                        context.run(stream.close)
+                    event_queue.put(("done", None))
+                except Exception as exc:
+                    event_queue.put(("error", (exc, traceback.format_exc())))
+
+            worker_thread = threading.Thread(target=_stream_worker, daemon=True)
+            worker_thread.start()
+
+            seen_msg_ids = set()
+            last_debate_speech = None
+            last_risk_speech = None
+
+            while True:
+                try:
+                    item = event_queue.get_nowait()
+                except queue.Empty:
+                    if not worker_thread.is_alive() and event_queue.empty():
+                        break
+
+                    # Emit periodic stats update
+                    s = stats_handler.get_stats()
+                    await _send(websocket, "stats", {
+                        "llm_calls": s["llm_calls"],
+                        "tool_calls": s["tool_calls"],
                         "tokens": {
-                            "input": getattr(stats_handler, "input_tokens", 0),
-                            "output": getattr(stats_handler, "output_tokens", 0),
+                            "input": s["tokens_in"],
+                            "output": s["tokens_out"],
                         },
-                        "elapsed": round(elapsed, 1),
-                    }
-                    await _send(websocket, "stats", stats)
-                except Exception:
-                    pass
-                await asyncio.sleep(2)
+                        "elapsed": round(time.time() - start_time, 1),
+                    })
+                    await asyncio.sleep(0.15)
+                    continue
 
-            # Get the trace results
-            trace = await stream_task
+                kind, payload = item
 
-            # ── 7. Process the trace into report sections ───────────────
-            for step in trace:
-                namespace, mode, chunk = step
+                if kind == "done":
+                    break
+                elif kind == "error":
+                    exc, tb = payload
+                    logger.error(f"Execution error in stream thread: {exc}\n{tb}")
+                    err_msg = str(exc)
+                    if "RESOURCE_EXHAUSTED" in err_msg or "429" in err_msg:
+                        err_msg = (
+                            "Rate limit exceeded (429 RESOURCE_EXHAUSTED). "
+                            "The free-tier quota for this model was reached. "
+                            "Try choosing Gemini 2.0 Flash or Gemini 1.5 Flash in the setup wizard, or try again shortly."
+                        )
+                    await _send(websocket, "error", {"message": err_msg, "trace": tb})
+                    return
+                elif kind == "step":
+                    namespace, mode, chunk = payload
+                    now_ts = datetime.datetime.now().strftime("%H:%M:%S")
 
-                if namespace:
-                    # Subgraph (analyst) step
-                    result = chunk.get("result") if mode == "tasks" else None
-                    if isinstance(result, dict):
-                        for key in ("market_report", "sentiment_report", "news_report", "fundamentals_report"):
-                            if result.get(key):
-                                report_sections[key] = result[key]
-                                await _send(websocket, "report_section", {
-                                    "section": key, "content": result[key]
+                    # ── Handle Analyst Subgraph Tasks ──────────────
+                    if namespace:
+                        result = chunk.get("result") if mode == "tasks" else None
+                        if isinstance(result, dict):
+                            analyst_key = None
+                            for k in ("market", "social", "news", "fundamentals"):
+                                if any(k in str(ns).lower() for ns in namespace):
+                                    analyst_key = k
+                                    break
+                            analyst_name = agent_display_map.get(analyst_key, "Analyst") if analyst_key else "Analyst"
+
+                            # 1. Inspect messages for tool calls and text
+                            sub_msgs = result.get("messages", [])
+                            if isinstance(sub_msgs, list):
+                                for msg in sub_msgs:
+                                    msg_id = getattr(msg, "id", None) or (type(msg).__name__, str(getattr(msg, "content", "")))
+                                    if msg_id in seen_msg_ids:
+                                        continue
+                                    seen_msg_ids.add(msg_id)
+
+                                    # Emit tool calls
+                                    for tc in getattr(msg, "tool_calls", None) or []:
+                                        await _send(websocket, "tool_call", {
+                                            "tool": tc.get("name", "tool"),
+                                            "args": tc.get("args", {}),
+                                            "timestamp": now_ts,
+                                        })
+
+                                    # Emit message or tool result
+                                    if msg.__class__.__name__ == "ToolMessage":
+                                        tool_name = getattr(msg, "name", "Tool")
+                                        content_str = str(msg.content or "")
+                                        await _send(websocket, "message", {
+                                            "sender": f"{tool_name} (Tool)",
+                                            "content": (content_str[:300] + "...") if len(content_str) > 300 else content_str,
+                                            "timestamp": now_ts,
+                                        })
+                                    else:
+                                        content = getattr(msg, "content", "")
+                                        if isinstance(content, str) and content.strip():
+                                            await _send(websocket, "message", {
+                                                "sender": analyst_name,
+                                                "content": (content[:400] + "...") if len(content) > 400 else content,
+                                                "timestamp": now_ts,
+                                            })
+
+                            # 2. Check if analyst produced its completed report
+                            for r_key, a_name in [
+                                ("market_report", "Market Analyst"),
+                                ("sentiment_report", "Sentiment Analyst"),
+                                ("news_report", "News Analyst"),
+                                ("fundamentals_report", "Fundamentals Analyst"),
+                            ]:
+                                if result.get(r_key) and r_key not in report_sections:
+                                    report_sections[r_key] = result[r_key]
+                                    final_state[r_key] = result[r_key]
+                                    await _send(websocket, "report_section", {
+                                        "section": r_key, "content": result[r_key]
+                                    })
+                                    await _send(websocket, "agent_update", {
+                                        "agent": a_name, "status": "completed"
+                                    })
+                                    await _send(websocket, "message", {
+                                        "sender": a_name,
+                                        "content": f"Completed {a_name} report.",
+                                        "timestamp": now_ts,
+                                    })
+
+                    # ── Handle Top-Level Values ────────────────────
+                    elif mode == "values" and isinstance(chunk, dict):
+                        final_state.update(chunk)
+
+                        # 1. Bull/Bear Investment Debate
+                        if chunk.get("investment_debate_state"):
+                            ds = chunk["investment_debate_state"]
+                            current_resp = ds.get("current_response", "")
+                            if current_resp and current_resp != last_debate_speech:
+                                last_debate_speech = current_resp
+                                speaker = "Bull Researcher" if current_resp.startswith("Bull") else "Bear Researcher"
+                                speech_text = current_resp.split(":", 1)[1].strip() if ":" in current_resp else current_resp
+                                await _send(websocket, "agent_update", {"agent": speaker, "status": "in_progress"})
+                                await _send(websocket, "message", {
+                                    "sender": speaker,
+                                    "content": (speech_text[:400] + "...") if len(speech_text) > 400 else speech_text,
+                                    "timestamp": now_ts,
                                 })
-                                agent_key = key.replace("_report", "")
-                                agent_name = agent_display_map.get(agent_key, agent_key)
-                                await _send(websocket, "agent_update", {
-                                    "agent": agent_name, "status": "completed"
-                                })
-                elif mode == "values" and isinstance(chunk, dict):
-                    final_state.update(chunk)
 
-                    # Investment debate
-                    if chunk.get("investment_debate_state"):
-                        ds = chunk["investment_debate_state"]
-                        if ds.get("bull_history"):
-                            report_sections["bull_research"] = ds["bull_history"]
-                            await _send(websocket, "report_section", {
-                                "section": "bull_research", "content": ds["bull_history"]
-                            })
-                            await _send(websocket, "agent_update", {
-                                "agent": "Bull Researcher", "status": "in_progress"
-                            })
-                        if ds.get("bear_history"):
-                            report_sections["bear_research"] = ds["bear_history"]
-                            await _send(websocket, "report_section", {
-                                "section": "bear_research", "content": ds["bear_history"]
-                            })
-                            await _send(websocket, "agent_update", {
-                                "agent": "Bear Researcher", "status": "in_progress"
-                            })
+                            if ds.get("bull_history") and report_sections.get("bull_research") != ds["bull_history"]:
+                                report_sections["bull_research"] = ds["bull_history"]
+                                await _send(websocket, "report_section", {"section": "bull_research", "content": ds["bull_history"]})
 
-                    if chunk.get("investment_plan"):
-                        report_sections["investment_plan"] = chunk["investment_plan"]
-                        await _send(websocket, "report_section", {
-                            "section": "investment_plan", "content": chunk["investment_plan"]
-                        })
-                        await _send(websocket, "agent_update", {"agent": "Research Manager", "status": "completed"})
-                        await _send(websocket, "agent_update", {"agent": "Bull Researcher", "status": "completed"})
-                        await _send(websocket, "agent_update", {"agent": "Bear Researcher", "status": "completed"})
+                            if ds.get("bear_history") and report_sections.get("bear_research") != ds["bear_history"]:
+                                report_sections["bear_research"] = ds["bear_history"]
+                                await _send(websocket, "report_section", {"section": "bear_research", "content": ds["bear_history"]})
 
-                    if chunk.get("trader_investment_plan"):
-                        report_sections["trader_plan"] = chunk["trader_investment_plan"]
-                        await _send(websocket, "report_section", {
-                            "section": "trader_plan", "content": chunk["trader_investment_plan"]
-                        })
-                        await _send(websocket, "agent_update", {"agent": "Trader", "status": "completed"})
+                        # 2. Research Manager
+                        if chunk.get("investment_plan") and "investment_plan" not in report_sections:
+                            report_sections["investment_plan"] = chunk["investment_plan"]
+                            await _send(websocket, "report_section", {"section": "investment_plan", "content": chunk["investment_plan"]})
+                            await _send(websocket, "agent_update", {"agent": "Bull Researcher", "status": "completed"})
+                            await _send(websocket, "agent_update", {"agent": "Bear Researcher", "status": "completed"})
+                            await _send(websocket, "agent_update", {"agent": "Research Manager", "status": "completed"})
+                            await _send(websocket, "message", {
+                                "sender": "Research Manager",
+                                "content": "Investment plan finalized.",
+                                "timestamp": now_ts,
+                            })
+                            await _send(websocket, "agent_update", {"agent": "Trader", "status": "in_progress"})
 
-                    # Risk debate
-                    if chunk.get("risk_debate_state"):
-                        rs = chunk["risk_debate_state"]
-                        if rs.get("aggressive_history"):
+                        # 3. Trader
+                        if chunk.get("trader_investment_plan") and "trader_plan" not in report_sections:
+                            report_sections["trader_plan"] = chunk["trader_investment_plan"]
+                            await _send(websocket, "report_section", {"section": "trader_plan", "content": chunk["trader_investment_plan"]})
+                            await _send(websocket, "agent_update", {"agent": "Trader", "status": "completed"})
+                            await _send(websocket, "message", {
+                                "sender": "Trader",
+                                "content": "Trading plan formulated.",
+                                "timestamp": now_ts,
+                            })
                             await _send(websocket, "agent_update", {"agent": "Aggressive Analyst", "status": "in_progress"})
-                        if rs.get("conservative_history"):
-                            await _send(websocket, "agent_update", {"agent": "Conservative Analyst", "status": "in_progress"})
-                        if rs.get("neutral_history"):
-                            await _send(websocket, "agent_update", {"agent": "Neutral Analyst", "status": "in_progress"})
 
-                    if chunk.get("final_trade_decision"):
-                        report_sections["final_decision"] = chunk["final_trade_decision"]
-                        await _send(websocket, "report_section", {
-                            "section": "final_decision", "content": chunk["final_trade_decision"]
-                        })
-                        for agent in ("Aggressive Analyst", "Conservative Analyst", "Neutral Analyst", "Portfolio Manager"):
-                            await _send(websocket, "agent_update", {"agent": agent, "status": "completed"})
+                        # 4. Risk Debate
+                        if chunk.get("risk_debate_state"):
+                            rs = chunk["risk_debate_state"]
+                            speaker = rs.get("latest_speaker")
+                            if speaker:
+                                await _send(websocket, "agent_update", {"agent": speaker, "status": "in_progress"})
 
-            # ── 8. Extract rating and send final result ─────────────────
+                            history = rs.get("history", "")
+                            if history and history != last_risk_speech:
+                                last_risk_speech = history
+                                lines = [l for l in history.strip().split("\n") if l.strip()]
+                                if lines:
+                                    last_line = lines[-1]
+                                    spk = speaker or "Risk Analyst"
+                                    txt = last_line
+                                    if ":" in last_line:
+                                        cand_spk, cand_txt = last_line.split(":", 1)
+                                        if any(k in cand_spk for k in ("Aggressive", "Conservative", "Neutral")):
+                                            spk = cand_spk.strip()
+                                            txt = cand_txt.strip()
+                                    await _send(websocket, "message", {
+                                        "sender": spk,
+                                        "content": (txt[:400] + "...") if len(txt) > 400 else txt,
+                                        "timestamp": now_ts,
+                                    })
+
+                        # 5. Final Decision
+                        if chunk.get("final_trade_decision") and "final_decision" not in report_sections:
+                            report_sections["final_decision"] = chunk["final_trade_decision"]
+                            await _send(websocket, "report_section", {"section": "final_decision", "content": chunk["final_trade_decision"]})
+                            for agent in ("Aggressive Analyst", "Conservative Analyst", "Neutral Analyst", "Portfolio Manager"):
+                                await _send(websocket, "agent_update", {"agent": agent, "status": "completed"})
+                            await _send(websocket, "message", {
+                                "sender": "Portfolio Manager",
+                                "content": "Final risk evaluation complete and decision signed off.",
+                                "timestamp": now_ts,
+                            })
+
+            # ── 7. Rating and final report assembly ─────────────────────
             from tradingagents.agents.rating import run_rating
             rating = run_rating(final_state) if final_state else "REVIEW"
 
-            # Record the decision
             try:
                 graph.record_decision(ticker, analysis_date, final_state)
             except Exception:
@@ -278,18 +394,19 @@ async def websocket_analysis_route(websocket: WebSocket):
 
             # Send final stats
             elapsed = time.time() - start_time
+            s = stats_handler.get_stats()
             stats = {
-                "llm_calls": getattr(stats_handler, "llm_call_count", 0),
-                "tool_calls": getattr(stats_handler, "tool_call_count", 0),
+                "llm_calls": s["llm_calls"],
+                "tool_calls": s["tool_calls"],
                 "tokens": {
-                    "input": getattr(stats_handler, "input_tokens", 0),
-                    "output": getattr(stats_handler, "output_tokens", 0),
+                    "input": s["tokens_in"],
+                    "output": s["tokens_out"],
                 },
                 "elapsed": round(elapsed, 1),
             }
             await _send(websocket, "stats", stats)
 
-            # Build the complete report text
+            # Build and send complete report
             complete_report = _build_complete_report(final_state, report_sections)
 
             await _send(websocket, "complete", {
@@ -332,24 +449,25 @@ def _build_complete_report(final_state: dict, sections: dict) -> str:
     """Assemble a markdown report from the final state and collected sections."""
     parts = []
 
-    if final_state.get("market_report"):
-        parts.append(f"## Market Analysis\n\n{final_state['market_report']}")
-    if final_state.get("sentiment_report"):
-        parts.append(f"## Sentiment Analysis\n\n{final_state['sentiment_report']}")
-    if final_state.get("news_report"):
-        parts.append(f"## News Analysis\n\n{final_state['news_report']}")
-    if final_state.get("fundamentals_report"):
-        parts.append(f"## Fundamentals Analysis\n\n{final_state['fundamentals_report']}")
+    for key, title in [
+        ("market_report", "Market Analysis"),
+        ("sentiment_report", "Sentiment Analysis"),
+        ("news_report", "News Analysis"),
+        ("fundamentals_report", "Fundamentals Analysis"),
+    ]:
+        content = final_state.get(key) or sections.get(key)
+        if content:
+            parts.append(f"## {title}\n\n{content}")
 
     if sections.get("bull_research"):
         parts.append(f"## Bull Research\n\n{sections['bull_research']}")
     if sections.get("bear_research"):
         parts.append(f"## Bear Research\n\n{sections['bear_research']}")
-    if final_state.get("investment_plan"):
-        parts.append(f"## Investment Plan\n\n{final_state['investment_plan']}")
-    if final_state.get("trader_investment_plan"):
-        parts.append(f"## Trading Plan\n\n{final_state['trader_investment_plan']}")
-    if final_state.get("final_trade_decision"):
-        parts.append(f"## Final Decision\n\n{final_state['final_trade_decision']}")
+    if final_state.get("investment_plan") or sections.get("investment_plan"):
+        parts.append(f"## Investment Plan\n\n{final_state.get('investment_plan') or sections.get('investment_plan')}")
+    if final_state.get("trader_investment_plan") or sections.get("trader_plan"):
+        parts.append(f"## Trading Plan\n\n{final_state.get('trader_investment_plan') or sections.get('trader_plan')}")
+    if final_state.get("final_trade_decision") or sections.get("final_decision"):
+        parts.append(f"## Final Decision\n\n{final_state.get('final_trade_decision') or sections.get('final_decision')}")
 
     return "\n\n---\n\n".join(parts) if parts else "No report content available."

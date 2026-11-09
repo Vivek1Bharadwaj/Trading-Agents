@@ -18,7 +18,7 @@ const ALL_AGENTS = [
 
 export default function AgentStatusGrid({ statuses }) {
     const getStatusIcon = (status) => {
-        if (status === 'complete') return <CheckCircle size={16} color="#10b981" />;
+        if (status === 'complete' || status === 'completed') return <CheckCircle size={16} color="#10b981" />;
         if (status === 'in_progress') return <Loader2 size={16} className="animate-spin" color="#bb0b0b" />;
         return <Clock size={16} color="#777777" />;
     };

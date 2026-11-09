@@ -178,7 +178,8 @@
   gap: 0.5rem;
   font-size: 0.875rem;
 }
-.status-indicator.complete { color: var(--bullish); }
+.status-indicator.complete,
+.status-indicator.completed { color: var(--bullish); }
 .status-indicator.in_progress { color: var(--accent); }
 
 .live-feed {
