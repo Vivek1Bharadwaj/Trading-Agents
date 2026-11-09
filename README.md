@@ -108,8 +108,3 @@ Trading-Agents/
 └── README.md
 ```
 
----
-
-## 🛡️ License & Attribution
-
-Designed and created by **[Vivek Bharadwaj](https://github.com/Vivek1Bharadwaj)**. Released under the MIT License.
