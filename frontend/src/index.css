@@ -1,13 +1,34 @@
 :root {
-  --bg-dark: #0a0a0f;
-  --bg-panel: #111827;
-  --bg-panel-hover: #1f2937;
-  --text-main: #f3f4f6;
-  --text-muted: #9ca3af;
+  /* Finanix design tokens */
+  --bg-dark: #000000;
+  --bg-panel: #0d0d0d;
+  --bg-panel-hover: #1a1a1a;
+  --text-main: #ffffff;
+  --text-muted: #777777;
   --bullish: #10b981;
   --bearish: #ef4444;
-  --accent: #3b82f6;
-  --border-color: #374151;
+  --accent: #bb0b0b;
+  --border-color: #262626;
+
+  /* Spacing scale */
+  --space-1: 4px;
+  --space-2: 6px;
+  --space-3: 8px;
+  --space-4: 10px;
+  --space-5: 11px;
+  --space-6: 13px;
+  --space-7: 15px;
+  --space-8: 16px;
+
+  /* Radius */
+  --radius-xs: 4px;
+  --radius-sm: 8px;
+  --radius-md: 50px;
+
+  /* Motion */
+  --motion-instant: 150ms;
+  --motion-fast: 300ms;
+  --motion-normal: 400ms;
 }
 
 * {
@@ -17,10 +38,13 @@
 }
 
 body {
-  font-family: 'Inter', system-ui, Avenir, Helvetica, Arial, sans-serif;
+  font-family: 'GT Walsheim Pro', 'Inter', system-ui, -apple-system,
+    'Segoe UI', Roboto, 'Helvetica Neue', Arial, sans-serif;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 25px;
   background-color: var(--bg-dark);
   color: var(--text-main);
-  line-height: 1.5;
   -webkit-font-smoothing: antialiased;
 }
 
@@ -29,7 +53,17 @@ a {
   text-decoration: none;
 }
 
+a:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
+}
+
 button {
   cursor: pointer;
   font-family: inherit;
+}
+
+button:focus-visible {
+  outline: 2px solid var(--accent);
+  outline-offset: 2px;
 }

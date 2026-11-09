@@ -30,8 +30,8 @@ function App() {
   return (
     <div className="app-container">
       <header className="header">
-        <Activity color="#10b981" size={32} />
-        <h1>Trading Agents</h1>
+        <Activity color="#bb0b0b" size={32} />
+        <h1>Trading-Agents</h1>
       </header>
       
       <main className="main-content">
@@ -55,6 +55,18 @@ function App() {
           />
         )}
       </main>
+
+      <footer style={{
+        textAlign: 'center',
+        padding: '1rem',
+        color: '#777777',
+        fontSize: '0.8rem',
+        borderTop: '1px solid #262626'
+      }}>
+        <a href="https://github.com/Vivek1Bharadwaj/Trading-Agents" style={{ color: '#bb0b0b', textDecoration: 'none' }}>Trading-Agents</a>
+        {' '}by{' '}
+        <a href="https://github.com/Vivek1Bharadwaj" style={{ color: '#bb0b0b', textDecoration: 'none' }}>Vivek Bharadwaj</a>
+      </footer>
     </div>
   );
 }

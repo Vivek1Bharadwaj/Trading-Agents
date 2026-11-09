@@ -65,7 +65,7 @@ async def validate_ticker(request: TickerRequest):
         return TickerValidation(valid=False, normalized="", asset_type="unknown",
                                 error="Ticker is required")
 
-    # Same charset check as cli/prompts.py
+    # Charset and length check
     if not all(ch.isalnum() or ch in "._-^=" for ch in raw) or len(raw) > 32:
         return TickerValidation(valid=False, normalized=raw.upper(), asset_type="unknown",
                                 error="Invalid ticker format")

@@ -48,7 +48,7 @@ async def websocket_analysis_route(websocket: WebSocket):
             "phase": "init",
         })
 
-        # ── 3. Build the config dict the same way cli/run.py does ───────
+        # ── 3. Build the config dict for the graph ─────────────────────
         from tradingagents.default_config import DEFAULT_CONFIG
 
         depth_map = {"Shallow": 1, "Medium": 3, "Deep": 5}
@@ -99,7 +99,7 @@ async def websocket_analysis_route(websocket: WebSocket):
         # ── 4. Create the graph ─────────────────────────────────────────
         try:
             from tradingagents.graph.trading_graph import TradingAgentsGraph
-            from cli.stats_handler import StatsCallbackHandler
+            from backend.stats_handler import StatsCallbackHandler
 
             stats_handler = StatsCallbackHandler()
 
@@ -141,6 +141,9 @@ async def websocket_analysis_route(websocket: WebSocket):
         try:
             init_state = graph.create_run_state(ticker, analysis_date, asset_type)
             args = graph.propagator.get_graph_args(callbacks=[stats_handler])
+            # Override stream_mode so tasks and values are both received
+            args["stream_mode"] = ["values", "tasks"]
+            args["subgraphs"] = True
 
             from tradingagents.dataflows.config import run_config_context
             context = run_config_context(config)
@@ -150,8 +153,7 @@ async def websocket_analysis_route(websocket: WebSocket):
                 nonlocal final_state
                 trace = []
                 stream = context.run(
-                    graph.graph.stream, init_state, subgraphs=True,
-                    stream_mode=["values", "tasks"], **args,
+                    graph.graph.stream, init_state, **args,
                 )
                 try:
                     while True:

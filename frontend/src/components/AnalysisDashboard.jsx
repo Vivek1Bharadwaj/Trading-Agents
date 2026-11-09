@@ -46,7 +46,8 @@ export default function AnalysisDashboard({ config, wsHook, onComplete }) {
                         borderRadius: '1rem', 
                         fontSize: '0.875rem', 
                         backgroundColor: isConnected ? 'rgba(16, 185, 129, 0.1)' : 'rgba(239, 68, 68, 0.1)',
-                        color: isConnected ? 'var(--bullish)' : 'var(--bearish)'
+                        color: isConnected ? 'var(--bullish)' : 'var(--bearish)',
+                        border: `1px solid ${isConnected ? '#10b981' : '#ef4444'}`
                     }}>
                         {isConnected ? 'Running' : 'Connecting...'}
                     </span>
