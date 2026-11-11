@@ -53,17 +53,20 @@ async def websocket_analysis_route(websocket: WebSocket):
         # ── 3. Build the config dict for the graph ─────────────────────
         from tradingagents.default_config import DEFAULT_CONFIG
 
-        # Calibrate debate/risk rounds by depth to prevent runaway token burn
+        # Calibrate debate/risk rounds and tool limits by depth to prevent runaway token burn
         depth_key = (req.research_depth or "shallow").strip().lower()
         if depth_key == "deep":
             max_debate_rounds = 2  # 2 Bull + 2 Bear = 4 turns
             max_risk_rounds = 2    # 2 Aggressive + 2 Conservative + 2 Neutral = 6 turns
+            max_tool_rounds = 4    # Optimized for Render free tier memory/rate limits
         elif depth_key == "medium":
             max_debate_rounds = 1  # 1 Bull + 1 Bear = 2 turns
             max_risk_rounds = 2    # 2 Aggressive + 2 Conservative + 2 Neutral = 6 turns
+            max_tool_rounds = 3
         else:  # shallow or fallback
             max_debate_rounds = 1  # 1 Bull + 1 Bear = 2 turns
             max_risk_rounds = 1    # 1 Aggressive + 1 Conservative + 1 Neutral = 3 turns
+            max_tool_rounds = 2
 
         config = DEFAULT_CONFIG.copy()
         config["llm_provider"] = req.llm_provider
@@ -72,6 +75,7 @@ async def websocket_analysis_route(websocket: WebSocket):
         config["backend_url"] = req.backend_url
         config["max_debate_rounds"] = max_debate_rounds
         config["max_risk_discuss_rounds"] = max_risk_rounds
+        config["max_tool_rounds"] = max_tool_rounds
         config["output_language"] = req.output_language or "English"
         config["checkpoint_enabled"] = False
         config["llm_max_retries"] = 5  # Enable exponential backoff retries for 429 rate limits
@@ -155,11 +159,11 @@ async def websocket_analysis_route(websocket: WebSocket):
             args["stream_mode"] = ["values", "tasks"]
             args["subgraphs"] = True
             
-            # >>> START NEW CODE: Inject Recursion Limit <<<
+            # Hard circuit breaker: inject a realistic recursion limit (100) to protect against loops
+            # while allowing deep/medium analysis workflows with multiple debate steps to complete normally.
             if "config" not in args or not args["config"]:
                 args["config"] = {}
-            args["config"]["recursion_limit"] = 25 
-            # >>> END NEW CODE <<<
+            args["config"]["recursion_limit"] = 100
 
             from tradingagents.dataflows.config import run_config_context
             context = run_config_context(config)
@@ -188,6 +192,8 @@ async def websocket_analysis_route(websocket: WebSocket):
             seen_msg_ids = set()
             last_debate_speech = None
             last_risk_speech = None
+            last_stats_time = start_time
+            last_keepalive_time = start_time
 
             while True:
                 try:
@@ -196,18 +202,31 @@ async def websocket_analysis_route(websocket: WebSocket):
                     if not worker_thread.is_alive() and event_queue.empty():
                         break
 
-                    # Emit periodic stats update
-                    s = stats_handler.get_stats()
-                    await _send(websocket, "stats", {
-                        "llm_calls": s["llm_calls"],
-                        "tool_calls": s["tool_calls"],
-                        "tokens": {
-                            "input": s["tokens_in"],
-                            "output": s["tokens_out"],
-                        },
-                        "elapsed": round(time.time() - start_time, 1),
-                    })
-                    await asyncio.sleep(0.15)
+                    now = time.time()
+                    # Emit throttled stats update once per second (prevents buffer clogging)
+                    if now - last_stats_time >= 1.0:
+                        last_stats_time = now
+                        s = stats_handler.get_stats()
+                        await _send(websocket, "stats", {
+                            "llm_calls": s["llm_calls"],
+                            "tool_calls": s["tool_calls"],
+                            "tokens": {
+                                "input": s["tokens_in"],
+                                "output": s["tokens_out"],
+                            },
+                            "elapsed": round(now - start_time, 1),
+                        })
+
+                    # Send periodic keepalive heartbeat every 5s to prevent Render/proxy timeout
+                    if now - last_keepalive_time >= 5.0:
+                        last_keepalive_time = now
+                        await _send(websocket, "status", {
+                            "message": "Analysis running...",
+                            "phase": "running",
+                            "heartbeat": True,
+                        })
+
+                    await asyncio.sleep(0.2)
                     continue
 
                 kind, payload = item
@@ -224,14 +243,13 @@ async def websocket_analysis_route(websocket: WebSocket):
                             "The free-tier quota for this model was reached. "
                             "Try choosing Gemini 2.0 Flash or Gemini 1.5 Flash in the setup wizard, or try again shortly."
                         )
-                    # >>> START NEW CODE: Catch Recursion Error <<<
                     elif "RecursionError" in err_msg or "recursion limit" in err_msg.lower():
                         err_msg = (
-                            "Agentic Loop Detected: An agent failed to resolve a task and hit the maximum step limit (25). "
+                            "Agentic Loop Detected: An agent exceeded the safety step limit (100). "
                             "Analysis halted to prevent server crash."
                         )
-                    # >>> END NEW CODE <<<
                     await _send(websocket, "error", {"message": err_msg, "trace": tb})
+                    await asyncio.sleep(0.5)
                     return
                 elif kind == "step":
                     namespace, mode, chunk = payload

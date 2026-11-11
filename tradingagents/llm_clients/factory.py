@@ -114,11 +114,13 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
     if temperature is not None and temperature != "":
         kwargs["temperature"] = float(temperature)
 
-    # SDK retry budget is cross-provider. Forward it only when explicitly set
-    # so each provider keeps its own default (usually 2) otherwise (#1091).
+    # SDK retry budget is cross-provider. Default to 3 with exponential backoff
+    # to ride out bursty 429 throttling and rate limits.
     max_retries = config.get("llm_max_retries")
     if max_retries is not None and max_retries != "":
         kwargs["max_retries"] = _coerce_max_retries(max_retries)
+    else:
+        kwargs["max_retries"] = 3
 
     # Output-token cap is cross-provider, but Gemini names it
     # ``max_output_tokens``; forward under the right key when set (#1204).

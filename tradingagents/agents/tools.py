@@ -2,8 +2,11 @@
 
 Each dated tool takes the run's ``trade_date`` from graph state (``InjectedState``)
 and never serves data past it, whatever date the model asks for.
+All tools catch errors internally and return natural language failure messages
+to prevent unhandled exceptions and infinite agent retry loops.
 """
 
+import logging
 from typing import Annotated
 
 from langchain_core.tools import tool
@@ -13,6 +16,17 @@ from tradingagents.dataflows.date_window import as_of, as_of_window
 from tradingagents.dataflows.errors import NoMarketDataError, VendorUnavailableError
 from tradingagents.dataflows.router import no_data_available, route_to_vendor, vendor_unavailable
 from tradingagents.dataflows.vendors.yahoo.snapshot import build_verified_market_snapshot
+
+logger = logging.getLogger(__name__)
+
+
+def _tool_error_msg(tool_name: str, error: Exception) -> str:
+    """Standardized natural language failure message to break agent retry loops."""
+    return (
+        f"DATA_UNAVAILABLE: {tool_name} failed ({type(error).__name__}: {error}). "
+        "Do NOT retry this tool with the same or different parameters. "
+        "Proceed with your report and analysis using whatever data you have already collected."
+    )
 
 
 @tool
@@ -33,9 +47,10 @@ def get_stock_data(
     """
     try:
         start_date, end_date = as_of_window(start_date, end_date, trade_date)
-    except ValueError as e:
-        return str(e)
-    return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+        return route_to_vendor("get_stock_data", symbol, start_date, end_date)
+    except Exception as e:
+        logger.warning("get_stock_data error: %s", e)
+        return _tool_error_msg("get_stock_data", e)
 
 
 @tool
@@ -56,17 +71,21 @@ def get_indicators(
     Returns:
         str: A formatted dataframe containing the technical indicators for the instrument and indicator.
     """
-    # LLMs sometimes pass multiple indicators as a comma-separated string;
-    # split and process each individually.
-    curr_date = as_of(curr_date, trade_date)
-    indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
-    results = []
-    for ind in indicators:
-        try:
-            results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
-        except ValueError as e:
-            results.append(str(e))
-    return "\n\n".join(results)
+    try:
+        curr_date = as_of(curr_date, trade_date)
+        indicators = [i.strip().lower() for i in indicator.split(",") if i.strip()]
+        results = []
+        for ind in indicators:
+            try:
+                results.append(route_to_vendor("get_indicators", symbol, ind, curr_date, look_back_days))
+            except Exception as e:
+                results.append(
+                    f"DATA_UNAVAILABLE: Indicator '{ind}' could not be computed ({e}). Do not retry."
+                )
+        return "\n\n".join(results) if results else "DATA_UNAVAILABLE: No indicators retrieved. Do not retry."
+    except Exception as e:
+        logger.warning("get_indicators error: %s", e)
+        return _tool_error_msg("get_indicators", e)
 
 
 @tool
@@ -85,13 +104,15 @@ def get_verified_market_snapshot(
     price levels, Bollinger bands, RSI, MACD, moving averages, support /
     resistance, or historical comparisons, and treat it as the source of truth.
     """
-    # An exception out of a tool would end the run.
     try:
         return build_verified_market_snapshot(symbol, as_of(curr_date, trade_date), look_back_days)
     except VendorUnavailableError as exc:
         return vendor_unavailable("get_verified_market_snapshot", exc)
     except NoMarketDataError as exc:
         return no_data_available(exc)
+    except Exception as exc:
+        logger.warning("get_verified_market_snapshot error: %s", exc)
+        return _tool_error_msg("get_verified_market_snapshot", exc)
 
 
 @tool
@@ -108,7 +129,11 @@ def get_fundamentals(
     Returns:
         str: A formatted report containing comprehensive fundamental data
     """
-    return route_to_vendor("get_fundamentals", ticker, as_of(curr_date, trade_date))
+    try:
+        return route_to_vendor("get_fundamentals", ticker, as_of(curr_date, trade_date))
+    except Exception as e:
+        logger.warning("get_fundamentals error: %s", e)
+        return _tool_error_msg("get_fundamentals", e)
 
 
 @tool
@@ -127,7 +152,11 @@ def get_balance_sheet(
     Returns:
         str: A formatted report containing balance sheet data
     """
-    return route_to_vendor("get_balance_sheet", ticker, freq, as_of(curr_date, trade_date))
+    try:
+        return route_to_vendor("get_balance_sheet", ticker, freq, as_of(curr_date, trade_date))
+    except Exception as e:
+        logger.warning("get_balance_sheet error: %s", e)
+        return _tool_error_msg("get_balance_sheet", e)
 
 
 @tool
@@ -146,7 +175,11 @@ def get_cashflow(
     Returns:
         str: A formatted report containing cash flow statement data
     """
-    return route_to_vendor("get_cashflow", ticker, freq, as_of(curr_date, trade_date))
+    try:
+        return route_to_vendor("get_cashflow", ticker, freq, as_of(curr_date, trade_date))
+    except Exception as e:
+        logger.warning("get_cashflow error: %s", e)
+        return _tool_error_msg("get_cashflow", e)
 
 
 @tool
@@ -165,7 +198,11 @@ def get_income_statement(
     Returns:
         str: A formatted report containing income statement data
     """
-    return route_to_vendor("get_income_statement", ticker, freq, as_of(curr_date, trade_date))
+    try:
+        return route_to_vendor("get_income_statement", ticker, freq, as_of(curr_date, trade_date))
+    except Exception as e:
+        logger.warning("get_income_statement error: %s", e)
+        return _tool_error_msg("get_income_statement", e)
 
 
 @tool
@@ -186,9 +223,10 @@ def get_news(
     """
     try:
         start_date, end_date = as_of_window(start_date, end_date, trade_date)
-    except ValueError as e:
-        return str(e)
-    return route_to_vendor("get_news", ticker, start_date, end_date)
+        return route_to_vendor("get_news", ticker, start_date, end_date)
+    except Exception as e:
+        logger.warning("get_news error: %s", e)
+        return _tool_error_msg("get_news", e)
 
 
 @tool
@@ -212,7 +250,11 @@ def get_global_news(
     Returns:
         str: A formatted string containing global news data
     """
-    return route_to_vendor("get_global_news", as_of(curr_date, trade_date), look_back_days, limit)
+    try:
+        return route_to_vendor("get_global_news", as_of(curr_date, trade_date), look_back_days, limit)
+    except Exception as e:
+        logger.warning("get_global_news error: %s", e)
+        return _tool_error_msg("get_global_news", e)
 
 
 @tool
@@ -226,7 +268,11 @@ def get_insider_transactions(
     Returns:
         str: A report of insider transaction data
     """
-    return route_to_vendor("get_insider_transactions", ticker, trade_date or None)
+    try:
+        return route_to_vendor("get_insider_transactions", ticker, trade_date or None)
+    except Exception as e:
+        logger.warning("get_insider_transactions error: %s", e)
+        return _tool_error_msg("get_insider_transactions", e)
 
 
 @tool
@@ -261,7 +307,11 @@ def get_macro_indicators(
     Returns:
         str: A formatted markdown report of the macro series
     """
-    return route_to_vendor("get_macro_indicators", indicator, as_of(curr_date, trade_date), look_back_days)
+    try:
+        return route_to_vendor("get_macro_indicators", indicator, as_of(curr_date, trade_date), look_back_days)
+    except Exception as e:
+        logger.warning("get_macro_indicators error: %s", e)
+        return _tool_error_msg("get_macro_indicators", e)
 
 
 @tool
@@ -288,4 +338,8 @@ def get_prediction_markets(
     Returns:
         str: A formatted markdown report of matching prediction markets
     """
-    return route_to_vendor("get_prediction_markets", topic, limit, trade_date or None)
+    try:
+        return route_to_vendor("get_prediction_markets", topic, limit, trade_date or None)
+    except Exception as e:
+        logger.warning("get_prediction_markets error: %s", e)
+        return _tool_error_msg("get_prediction_markets", e)

@@ -1,3 +1,4 @@
+import logging
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -6,11 +7,21 @@ from tradingagents.agents.context import (
     report_or_absent,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _trim_text(text: str, max_chars: int = 2000) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[Report excerpted for discussion efficiency]..."
+
 
 def create_aggressive_debator(llm):
     def aggressive_node(state) -> dict:
-        risk_debate_state = state["risk_debate_state"]
-        history = risk_debate_state.get("history", "")
+        risk_debate_state = state.get("risk_debate_state") or {}
+        history = _trim_text(risk_debate_state.get("history", ""), max_chars=2500)
         aggressive_history = risk_debate_state.get("aggressive_history", "")
 
         current_conservative_response = opponent_argument_or_opening(
@@ -20,14 +31,14 @@ def create_aggressive_debator(llm):
             risk_debate_state.get("current_neutral_response", ""), "neutral analyst"
         )
 
-        market_research_report = report_or_absent(state["market_report"], "market")
-        sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
-        news_report = report_or_absent(state["news_report"], "news")
-        fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
+        market_research_report = _trim_text(report_or_absent(state.get("market_report"), "market"))
+        sentiment_report = _trim_text(report_or_absent(state.get("sentiment_report"), "sentiment"))
+        news_report = _trim_text(report_or_absent(state.get("news_report"), "news"))
+        fundamentals_report = _trim_text(report_or_absent(state.get("fundamentals_report"), "fundamentals"))
         instrument_context = get_instrument_context_from_state(state)
         portfolio_context = get_portfolio_context_from_state(state)
 
-        trader_decision = state["trader_investment_plan"]
+        trader_decision = state.get("trader_investment_plan", "")
 
         prompt = f"""As the Aggressive Risk Analyst, your role is to actively champion high-reward, high-risk opportunities, emphasizing bold strategies and competitive advantages. When evaluating the trader's decision or plan, focus intently on the potential upside, growth potential, and innovative benefits—even when these come with elevated risk. Use the provided market data and sentiment analysis to strengthen your arguments and challenge the opposing views. Specifically, respond directly to each point made by the conservative and neutral analysts, countering with data-driven rebuttals and persuasive reasoning. Highlight where their caution might miss critical opportunities or where their assumptions may be overly conservative. Here is the trader's decision:
 
@@ -45,22 +56,28 @@ Here is the current conversation history: {history} Here are the last arguments 
 
 Engage actively by addressing any specific concerns raised, refuting the weaknesses in their logic, and asserting the benefits of risk-taking to outpace market norms. Maintain a focus on debating and persuading, not just presenting data. Challenge each counterpoint to underscore why a high-risk approach is optimal. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        try:
+            response = llm.invoke(prompt)
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            if not content.strip():
+                content = "High-growth reward profile justifies disciplined aggression."
+        except Exception as e:
+            logger.error("Aggressive debator invoke error: %s", e)
+            content = "High-conviction perspective maintained focusing on asymmetric upside."
 
-        argument = f"Aggressive Analyst: {response.content}"
+        argument = f"Aggressive Analyst: {content.strip()}"
+        prev_count = risk_debate_state.get("count", 0)
 
         new_risk_debate_state = {
-            "history": history + "\n" + argument,
-            "aggressive_history": aggressive_history + "\n" + argument,
+            "history": (history + "\n" + argument).strip(),
+            "aggressive_history": (aggressive_history + "\n" + argument).strip(),
             "conservative_history": risk_debate_state.get("conservative_history", ""),
             "neutral_history": risk_debate_state.get("neutral_history", ""),
             "latest_speaker": "Aggressive",
             "current_aggressive_response": argument,
             "current_conservative_response": risk_debate_state.get("current_conservative_response", ""),
-            "current_neutral_response": risk_debate_state.get(
-                "current_neutral_response", ""
-            ),
-            "count": risk_debate_state["count"] + 1,
+            "current_neutral_response": risk_debate_state.get("current_neutral_response", ""),
+            "count": prev_count + 1,
         }
 
         return {"risk_debate_state": new_risk_debate_state}

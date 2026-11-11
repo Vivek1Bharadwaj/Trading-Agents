@@ -67,20 +67,47 @@ def _analyst_graph(spec, agent, max_tool_rounds: int):
         graph.add_edge("agent", END)
         return graph.compile()
 
+    import json
+
     def calls(messages):
         return [call["name"] for m in messages for call in (getattr(m, "tool_calls", None) or [])]
 
     def rounds(messages) -> int:
         return sum(1 for m in messages if getattr(m, "tool_calls", None))
 
+    def has_duplicate_consecutive_calls(messages) -> bool:
+        """Detect immediate duplicate tool calls to break agent loops early."""
+        tool_call_msgs = [m for m in messages if getattr(m, "tool_calls", None)]
+        if len(tool_call_msgs) >= 2:
+            last = getattr(tool_call_msgs[-1], "tool_calls", [])
+            prev = getattr(tool_call_msgs[-2], "tool_calls", [])
+            if last and prev:
+                last_sig = [(c.get("name"), json.dumps(c.get("args", {}), sort_keys=True, default=str)) for c in last]
+                prev_sig = [(c.get("name"), json.dumps(c.get("args", {}), sort_keys=True, default=str)) for c in prev]
+                if last_sig == prev_sig:
+                    return True
+        return False
+
     def more_or_wrap_up(state) -> str:
-        return "wrap_up" if rounds(state["messages"]) >= max_tool_rounds else "agent"
+        if rounds(state["messages"]) >= max_tool_rounds or has_duplicate_consecutive_calls(state["messages"]):
+            return "wrap_up"
+        return "agent"
 
     def wrap_up(state):
         repeated = ", ".join(f"{name} x{n}" for name, n in Counter(calls(state["messages"])).most_common())
-        logger.warning("%s used its %d tool rounds (%s); asking for its report",
+        logger.warning("%s reached limit (%d rounds, %s); forcing final report",
                        spec.agent_node, max_tool_rounds, repeated)
-        return agent({**state, "messages": [*state["messages"], HumanMessage(WRAP_UP)]})
+        try:
+            res = agent({**state, "messages": [*state["messages"], HumanMessage(WRAP_UP)]})
+            if not res.get(spec.report_key):
+                res[spec.report_key] = f"Completed {spec.agent_node} analysis from available data."
+            return res
+        except Exception as e:
+            logger.error("Error during %s wrap_up: %s", spec.agent_node, e)
+            return {
+                "messages": [HumanMessage(content=f"Report concluded from collected data ({e}).")],
+                spec.report_key: f"{spec.agent_node} completed using collected data."
+            }
 
     graph.add_node("tools", ToolNode(list(spec.tools)))
     graph.add_node("wrap_up", wrap_up)

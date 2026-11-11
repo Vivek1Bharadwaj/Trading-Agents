@@ -1,5 +1,4 @@
 import { useState } from 'react';
-import TradingLogo from './Public/1000248223-removebg-preview.svg';
 import SetupWizard from './components/SetupWizard';
 import AnalysisDashboard from './components/AnalysisDashboard';
 import FinalReport from './components/FinalReport';
@@ -30,7 +29,7 @@ function App() {
   return (
     <div className="app-container">
       <header className="header">
-        <img src={TradingLogo} alt="Trading-Agents Logo" className="trading-logo" />
+        <img src="/favicon.svg" alt="Trading-Agents Logo" className="trading-logo" />
         <h1>Trading-Agents</h1>
       </header>
       

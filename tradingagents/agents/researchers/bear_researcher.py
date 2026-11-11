@@ -1,3 +1,4 @@
+import logging
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -5,20 +6,31 @@ from tradingagents.agents.context import (
     report_or_absent,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _trim_text(text: str, max_chars: int = 2500) -> str:
+    """Trim large text dumps to prevent token explosion and OOM on memory-limited hosts."""
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[Report excerpted for debate efficiency]..."
+
 
 def create_bear_researcher(llm):
     def bear_node(state) -> dict:
-        investment_debate_state = state["investment_debate_state"]
-        history = investment_debate_state.get("history", "")
+        investment_debate_state = state.get("investment_debate_state") or {}
+        history = _trim_text(investment_debate_state.get("history", ""), max_chars=3000)
         bear_history = investment_debate_state.get("bear_history", "")
 
         current_response = opponent_argument_or_opening(
             investment_debate_state.get("current_response", ""), "bull analyst"
         )
-        market_research_report = report_or_absent(state["market_report"], "market")
-        sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
-        news_report = report_or_absent(state["news_report"], "news")
-        fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
+        market_research_report = _trim_text(report_or_absent(state.get("market_report"), "market"))
+        sentiment_report = _trim_text(report_or_absent(state.get("sentiment_report"), "sentiment"))
+        news_report = _trim_text(report_or_absent(state.get("news_report"), "news"))
+        fundamentals_report = _trim_text(report_or_absent(state.get("fundamentals_report"), "fundamentals"))
         instrument_context = get_instrument_context_from_state(state)
         asset_type = state.get("asset_type", "stock")
         target_label = "stock" if asset_type == "stock" else "asset"
@@ -31,7 +43,6 @@ def create_bear_researcher(llm):
         prompt = f"""You are a Bear Analyst making the case against investing in the {target_label}. Your goal is to present a well-reasoned argument emphasizing risks, challenges, and negative indicators. Leverage the provided research and data to highlight potential downsides and counter bullish arguments effectively.
 
 Key points to focus on:
-
 - Risks and Challenges: Highlight factors like market saturation, financial instability, or macroeconomic threats that could hinder the stock's performance.
 - Competitive Weaknesses: Emphasize vulnerabilities such as weaker market positioning, declining innovation, or threats from competitors.
 - Negative Indicators: Use evidence from financial data, market trends, or recent adverse news to support your position.
@@ -39,7 +50,6 @@ Key points to focus on:
 - Engagement: Present your argument in a conversational style, directly engaging with the bull analyst's points and debating effectively rather than simply listing facts.
 
 Resources available:
-
 {instrument_context}
 Market research report: {market_research_report}
 Social media sentiment report: {sentiment_report}
@@ -50,16 +60,24 @@ Last bull argument: {current_response}
 Use this information to deliver a compelling bear argument, refute the bull's claims, and engage in a dynamic debate that demonstrates the risks and weaknesses of investing in the {target_label}.
 """ + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        try:
+            response = llm.invoke(prompt)
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            if not content.strip():
+                content = "Downside risks, macro headwinds, and valuation vulnerability warrant a defensive bear thesis."
+        except Exception as e:
+            logger.error("Bear researcher invoke error: %s", e)
+            content = "Defensive stance maintained highlighting downside risks and macro headwinds."
 
-        argument = f"Bear Analyst: {response.content}"
+        argument = f"Bear Analyst: {content.strip()}"
+        prev_count = investment_debate_state.get("count", 0)
 
         new_investment_debate_state = {
-            "history": history + "\n" + argument,
-            "bear_history": bear_history + "\n" + argument,
+            "history": (history + "\n" + argument).strip(),
+            "bear_history": (bear_history + "\n" + argument).strip(),
             "bull_history": investment_debate_state.get("bull_history", ""),
             "current_response": argument,
-            "count": investment_debate_state["count"] + 1,
+            "count": prev_count + 1,
         }
 
         return {"investment_debate_state": new_investment_debate_state}

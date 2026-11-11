@@ -114,10 +114,9 @@ def build_default_config() -> dict:
         # variation on models that honor it; reasoning models largely ignore it
         # and no setting makes LLM output bit-identical across runs (see README).
         "temperature": None,
-        # SDK retry budget forwarded to every provider chat client. None leaves each
-        # provider/SDK at its own default (usually 2). Raise it to ride out bursty
-        # 429 throttling on rate-limited deployments instead of aborting a run (#1091).
-        "llm_max_retries": None,
+        # SDK retry budget forwarded to every provider chat client. Default to 3 with
+        # exponential backoff to handle rate limits without aborting.
+        "llm_max_retries": 3,
         # Cap on output tokens forwarded to every provider chat client. None leaves
         # each provider at its own default. Set it to bound a model that emits
         # unbounded reasoning/output and hangs or trips a gateway idle timeout
@@ -134,12 +133,12 @@ def build_default_config() -> dict:
         "max_risk_discuss_rounds": 1,
         "max_recur_limit": 100,
         # Rounds of tool calls an analyst may make before it is asked for its report.
-        "max_tool_rounds": 20,
+        # Set to 4 (rather than 20) to prevent request spam, runaway tool loops, and OOM.
+        "max_tool_rounds": 4,
         # News / data fetching parameters
-        # Increase for longer lookback strategies or to broaden macro coverage;
-        # decrease to reduce token usage in agent prompts.
-        "news_article_limit": 20,             # max articles per ticker (ticker-news)
-        "global_news_article_limit": 10,      # max articles for global/macro news
+        # Calibrated for efficiency on Render and standard API tiers.
+        "news_article_limit": 10,             # max articles per ticker (ticker-news)
+        "global_news_article_limit": 5,       # max articles for global/macro news
         "global_news_lookback_days": 7,       # macro news lookback window
         # Search queries used by get_global_news for macro headlines. Extend or
         # replace to broaden geographic / sector coverage.

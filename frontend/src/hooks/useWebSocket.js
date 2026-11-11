@@ -22,6 +22,7 @@ export const useWebSocket = () => {
     const [isComplete, setIsComplete] = useState(false);
 
     const wsRef = useRef(null);
+    const pingRef = useRef(null);
 
     const connect = useCallback((config) => {
         setIsConnected(false);
@@ -31,11 +32,27 @@ export const useWebSocket = () => {
         setReportSections({});
         setIsComplete(false);
 
+        if (pingRef.current) {
+            clearInterval(pingRef.current);
+            pingRef.current = null;
+        }
+
         const ws = new WebSocket(getWsUrl());
         wsRef.current = ws;
 
         ws.onopen = () => {
             setIsConnected(true);
+            
+            // Client-side heartbeat ping every 15s to maintain active tunnel through proxies/Render
+            pingRef.current = setInterval(() => {
+                if (ws.readyState === WebSocket.OPEN) {
+                    try {
+                        ws.send(JSON.stringify({ type: 'ping' }));
+                    } catch (e) {
+                        // ignore ping send errors
+                    }
+                }
+            }, 15000);
             
             // Map frontend config state to backend AnalysisRequest schema
             const analysisRequest = {
@@ -97,11 +114,21 @@ export const useWebSocket = () => {
             }
         };
 
-        ws.onerror = () => setError("WebSocket Connection Error");
-        ws.onclose = () => setIsConnected(false);
+        ws.onerror = () => {
+            if (pingRef.current) clearInterval(pingRef.current);
+            setError("WebSocket Connection Error");
+        };
+        ws.onclose = () => {
+            if (pingRef.current) clearInterval(pingRef.current);
+            setIsConnected(false);
+        };
     }, []);
 
     const disconnect = useCallback(() => {
+        if (pingRef.current) {
+            clearInterval(pingRef.current);
+            pingRef.current = null;
+        }
         if (wsRef.current) {
             wsRef.current.close();
             wsRef.current = null;

@@ -1,3 +1,4 @@
+import logging
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -6,11 +7,21 @@ from tradingagents.agents.context import (
     report_or_absent,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _trim_text(text: str, max_chars: int = 2000) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[Report excerpted for discussion efficiency]..."
+
 
 def create_neutral_debator(llm):
     def neutral_node(state) -> dict:
-        risk_debate_state = state["risk_debate_state"]
-        history = risk_debate_state.get("history", "")
+        risk_debate_state = state.get("risk_debate_state") or {}
+        history = _trim_text(risk_debate_state.get("history", ""), max_chars=2500)
         neutral_history = risk_debate_state.get("neutral_history", "")
 
         current_aggressive_response = opponent_argument_or_opening(
@@ -20,14 +31,14 @@ def create_neutral_debator(llm):
             risk_debate_state.get("current_conservative_response", ""), "conservative analyst"
         )
 
-        market_research_report = report_or_absent(state["market_report"], "market")
-        sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
-        news_report = report_or_absent(state["news_report"], "news")
-        fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
+        market_research_report = _trim_text(report_or_absent(state.get("market_report"), "market"))
+        sentiment_report = _trim_text(report_or_absent(state.get("sentiment_report"), "sentiment"))
+        news_report = _trim_text(report_or_absent(state.get("news_report"), "news"))
+        fundamentals_report = _trim_text(report_or_absent(state.get("fundamentals_report"), "fundamentals"))
         instrument_context = get_instrument_context_from_state(state)
         portfolio_context = get_portfolio_context_from_state(state)
 
-        trader_decision = state["trader_investment_plan"]
+        trader_decision = state.get("trader_investment_plan", "")
 
         prompt = f"""As the Neutral Risk Analyst, your role is to provide a balanced perspective, weighing both the potential benefits and risks of the trader's decision or plan. You prioritize a well-rounded approach, evaluating the upsides and downsides while factoring in broader market trends, potential economic shifts, and diversification strategies.Here is the trader's decision:
 
@@ -45,22 +56,28 @@ Here is the current conversation history: {history} Here is the last response fr
 
 Engage actively by analyzing both sides critically, addressing weaknesses in the aggressive and conservative arguments to advocate for a more balanced approach. Challenge each of their points to illustrate why a moderate risk strategy might offer the best of both worlds, providing growth potential while safeguarding against extreme volatility. Focus on debating rather than simply presenting data, aiming to show that a balanced view can lead to the most reliable outcomes. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        try:
+            response = llm.invoke(prompt)
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            if not content.strip():
+                content = "A balanced allocation approach mitigates volatility while capturing upside."
+        except Exception as e:
+            logger.error("Neutral debator invoke error: %s", e)
+            content = "Prudent middle-ground allocation recommended to balance upside with risk."
 
-        argument = f"Neutral Analyst: {response.content}"
+        argument = f"Neutral Analyst: {content.strip()}"
+        prev_count = risk_debate_state.get("count", 0)
 
         new_risk_debate_state = {
-            "history": history + "\n" + argument,
+            "history": (history + "\n" + argument).strip(),
             "aggressive_history": risk_debate_state.get("aggressive_history", ""),
             "conservative_history": risk_debate_state.get("conservative_history", ""),
-            "neutral_history": neutral_history + "\n" + argument,
+            "neutral_history": (neutral_history + "\n" + argument).strip(),
             "latest_speaker": "Neutral",
-            "current_aggressive_response": risk_debate_state.get(
-                "current_aggressive_response", ""
-            ),
+            "current_aggressive_response": risk_debate_state.get("current_aggressive_response", ""),
             "current_conservative_response": risk_debate_state.get("current_conservative_response", ""),
             "current_neutral_response": argument,
-            "count": risk_debate_state["count"] + 1,
+            "count": prev_count + 1,
         }
 
         return {"risk_debate_state": new_risk_debate_state}

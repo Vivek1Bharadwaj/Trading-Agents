@@ -1,5 +1,6 @@
 """FastAPI application for TradingAgents web frontend."""
 
+import os
 import datetime
 import re
 
@@ -103,9 +104,17 @@ if __name__ == "__main__":
     import uvicorn
     uvicorn.run(app, host="0.0.0.0", port=8000)
 
-# Serve React frontend
-app.mount(
-    "/",
-    StaticFiles(directory="frontend/dist", html=True),
-    name="frontend"
-)
+# Serve React frontend if built, or informative fallback
+if os.path.isdir("frontend/dist"):
+    app.mount(
+        "/",
+        StaticFiles(directory="frontend/dist", html=True),
+        name="frontend"
+    )
+else:
+    @app.get("/")
+    async def index():
+        return {
+            "status": "online",
+            "message": "TradingAgents API backend is running. Build the frontend (`npm run build` inside frontend/) to serve the Web UI."
+        }

@@ -282,16 +282,19 @@ def route_to_vendor(method: str, *args, **kwargs):
         return no_data_available(last_no_data)
 
     # No vendor returned data and none reported clean "no data" — surface the
-    # first real error (e.g. the primary vendor's network failure). Optional
-    # enrichment categories degrade to a sentinel instead, so flavour data can't
-    # abort the run.
+    # first real error (e.g. the primary vendor's network failure).
+    # Instead of raising raw exceptions to the LLM agent, return instructive sentinels
+    # so the agent does not enter an infinite retry loop.
     if first_error is not None:
-        if category in OPTIONAL_CATEGORIES:
-            logger.warning("Optional %s unavailable for %s: %s", category, method, first_error)
-            return (
-                f"DATA_UNAVAILABLE: optional {category} could not be retrieved "
-                f"({first_error}). Proceed without it; do not fabricate values."
-            )
-        raise first_error
+        logger.warning("Vendor error for %s in %s: %s", method, category, first_error)
+        return (
+            f"DATA_UNAVAILABLE: {method} ({category}) could not be retrieved "
+            f"({first_error}). Proceed with your analysis using whatever data you have "
+            f"already collected; do NOT retry this tool."
+        )
 
-    raise RuntimeError(f"No available vendor for '{method}'")
+    logger.warning("No available vendor for %s", method)
+    return (
+        f"DATA_UNAVAILABLE: No available vendor could serve '{method}'. "
+        f"Proceed with your analysis using existing data; do NOT retry this tool."
+    )

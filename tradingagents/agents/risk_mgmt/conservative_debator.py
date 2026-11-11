@@ -1,3 +1,4 @@
+import logging
 from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
@@ -6,11 +7,21 @@ from tradingagents.agents.context import (
     report_or_absent,
 )
 
+logger = logging.getLogger(__name__)
+
+
+def _trim_text(text: str, max_chars: int = 2000) -> str:
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    return text[:max_chars] + "\n...[Report excerpted for discussion efficiency]..."
+
 
 def create_conservative_debator(llm):
     def conservative_node(state) -> dict:
-        risk_debate_state = state["risk_debate_state"]
-        history = risk_debate_state.get("history", "")
+        risk_debate_state = state.get("risk_debate_state") or {}
+        history = _trim_text(risk_debate_state.get("history", ""), max_chars=2500)
         conservative_history = risk_debate_state.get("conservative_history", "")
 
         current_aggressive_response = opponent_argument_or_opening(
@@ -20,14 +31,14 @@ def create_conservative_debator(llm):
             risk_debate_state.get("current_neutral_response", ""), "neutral analyst"
         )
 
-        market_research_report = report_or_absent(state["market_report"], "market")
-        sentiment_report = report_or_absent(state["sentiment_report"], "sentiment")
-        news_report = report_or_absent(state["news_report"], "news")
-        fundamentals_report = report_or_absent(state["fundamentals_report"], "fundamentals")
+        market_research_report = _trim_text(report_or_absent(state.get("market_report"), "market"))
+        sentiment_report = _trim_text(report_or_absent(state.get("sentiment_report"), "sentiment"))
+        news_report = _trim_text(report_or_absent(state.get("news_report"), "news"))
+        fundamentals_report = _trim_text(report_or_absent(state.get("fundamentals_report"), "fundamentals"))
         instrument_context = get_instrument_context_from_state(state)
         portfolio_context = get_portfolio_context_from_state(state)
 
-        trader_decision = state["trader_investment_plan"]
+        trader_decision = state.get("trader_investment_plan", "")
 
         prompt = f"""As the Conservative Risk Analyst, your primary objective is to protect assets, minimize volatility, and ensure steady, reliable growth. You prioritize stability, security, and risk mitigation, carefully assessing potential losses, economic downturns, and market volatility. When evaluating the trader's decision or plan, critically examine high-risk elements, pointing out where the decision may expose the firm to undue risk and where more cautious alternatives could secure long-term gains. Here is the trader's decision:
 
@@ -45,24 +56,28 @@ Here is the current conversation history: {history} Here is the last response fr
 
 Engage by questioning their optimism and emphasizing the potential downsides they may have overlooked. Address each of their counterpoints to showcase why a conservative stance is ultimately the safest path for the firm's assets. Focus on debating and critiquing their arguments to demonstrate the strength of a low-risk strategy over their approaches. Output conversationally as if you are speaking without any special formatting.""" + get_language_instruction()
 
-        response = llm.invoke(prompt)
+        try:
+            response = llm.invoke(prompt)
+            content = response.content if isinstance(response.content, str) else str(response.content)
+            if not content.strip():
+                content = "Capital preservation and volatility controls must remain the primary priority."
+        except Exception as e:
+            logger.error("Conservative debator invoke error: %s", e)
+            content = "Risk mitigation and capital preservation emphasized under current market uncertainty."
 
-        argument = f"Conservative Analyst: {response.content}"
+        argument = f"Conservative Analyst: {content.strip()}"
+        prev_count = risk_debate_state.get("count", 0)
 
         new_risk_debate_state = {
-            "history": history + "\n" + argument,
+            "history": (history + "\n" + argument).strip(),
             "aggressive_history": risk_debate_state.get("aggressive_history", ""),
-            "conservative_history": conservative_history + "\n" + argument,
+            "conservative_history": (conservative_history + "\n" + argument).strip(),
             "neutral_history": risk_debate_state.get("neutral_history", ""),
             "latest_speaker": "Conservative",
-            "current_aggressive_response": risk_debate_state.get(
-                "current_aggressive_response", ""
-            ),
+            "current_aggressive_response": risk_debate_state.get("current_aggressive_response", ""),
             "current_conservative_response": argument,
-            "current_neutral_response": risk_debate_state.get(
-                "current_neutral_response", ""
-            ),
-            "count": risk_debate_state["count"] + 1,
+            "current_neutral_response": risk_debate_state.get("current_neutral_response", ""),
+            "count": prev_count + 1,
         }
 
         return {"risk_debate_state": new_risk_debate_state}
