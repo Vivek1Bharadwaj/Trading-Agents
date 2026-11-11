@@ -155,11 +155,10 @@ async def websocket_analysis_route(websocket: WebSocket):
             args["stream_mode"] = ["values", "tasks"]
             args["subgraphs"] = True
             
-            # >>> START NEW CODE: Inject Recursion Limit <<<
             if "config" not in args or not args["config"]:
                 args["config"] = {}
-            args["config"]["recursion_limit"] = 25 
-            # >>> END NEW CODE <<<
+            if "recursion_limit" not in args["config"]:
+                args["config"]["recursion_limit"] = graph.propagator.max_recur_limit
 
             from tradingagents.dataflows.config import run_config_context
             context = run_config_context(config)
@@ -207,7 +206,7 @@ async def websocket_analysis_route(websocket: WebSocket):
                         },
                         "elapsed": round(time.time() - start_time, 1),
                     })
-                    await asyncio.sleep(0.15)
+                    await asyncio.sleep(0.02)
                     continue
 
                 kind, payload = item
@@ -224,13 +223,12 @@ async def websocket_analysis_route(websocket: WebSocket):
                             "The free-tier quota for this model was reached. "
                             "Try choosing Gemini 2.0 Flash or Gemini 1.5 Flash in the setup wizard, or try again shortly."
                         )
-                    # >>> START NEW CODE: Catch Recursion Error <<<
                     elif "RecursionError" in err_msg or "recursion limit" in err_msg.lower():
+                        rec_limit = args.get("config", {}).get("recursion_limit", 100)
                         err_msg = (
-                            "Agentic Loop Detected: An agent failed to resolve a task and hit the maximum step limit (25). "
+                            f"Agentic Loop Detected: An agent failed to resolve a task and hit the maximum step limit ({rec_limit}). "
                             "Analysis halted to prevent server crash."
                         )
-                    # >>> END NEW CODE <<<
                     await _send(websocket, "error", {"message": err_msg, "trace": tb})
                     return
                 elif kind == "step":
@@ -402,8 +400,15 @@ async def websocket_analysis_route(websocket: WebSocket):
 
             try:
                 graph.record_decision(ticker, analysis_date, final_state)
-            except Exception:
-                pass
+            except Exception as rec_err:
+                logger.warning(f"Failed to record decision: {rec_err}")
+
+            saved_report_path = None
+            try:
+                saved_report_path = str(graph.save_reports(final_state, ticker))
+                logger.info(f"Successfully saved analysis reports to {saved_report_path}")
+            except Exception as rep_err:
+                logger.warning(f"Failed to save reports to disk: {rep_err}")
 
             # Send final stats
             elapsed = time.time() - start_time
@@ -425,6 +430,7 @@ async def websocket_analysis_route(websocket: WebSocket):
             await _send(websocket, "complete", {
                 "rating": rating,
                 "report": complete_report,
+                "report_path": saved_report_path,
                 "sections": report_sections,
             })
 
