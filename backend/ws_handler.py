@@ -189,11 +189,13 @@ async def websocket_analysis_route(websocket: WebSocket):
             args = graph.propagator.get_graph_args(callbacks=[stats_handler])
             args["stream_mode"] = ["values", "tasks"]
             args["subgraphs"] = True
-
-            # Hard circuit breaker: inject recursion_limit from config (default 100)
+            # Hard circuit breaker: inject recursion_limit from propagator/config if unset
             if "config" not in args or not args["config"]:
                 args["config"] = {}
-            args["config"]["recursion_limit"] = int(config.get("max_recur_limit", 100))
+            if "recursion_limit" not in args["config"]:
+                args["config"]["recursion_limit"] = int(
+                    config.get("max_recur_limit", getattr(graph.propagator, "max_recur_limit", 100))
+                )
 
             from tradingagents.dataflows.config import run_config_context
             context = run_config_context(config)
@@ -294,8 +296,9 @@ async def websocket_analysis_route(websocket: WebSocket):
                             "Try a lighter model (e.g. gemini-3.5-flash-lite), Shallow mode, or retry in a minute."
                         )
                     elif "RecursionError" in err_msg or "recursion limit" in err_msg.lower():
+                        rec_limit = args.get("config", {}).get("recursion_limit", 100)
                         err_msg = (
-                            "Agentic Loop Detected: An agent exceeded the safety step limit. "
+                            f"Agentic Loop Detected: An agent failed to resolve a task and hit the maximum step limit ({rec_limit}). "
                             "Analysis halted to prevent server crash."
                         )
                     await emit("error", {"message": err_msg, "trace": tb})
@@ -520,8 +523,18 @@ async def websocket_analysis_route(websocket: WebSocket):
 
             try:
                 await asyncio.to_thread(graph.record_decision, ticker, analysis_date, final_state)
-            except Exception:
-                pass
+            except Exception as rec_err:
+                logger.warning(f"Failed to record decision: {rec_err}")
+
+            saved_report_path = None
+            if hasattr(graph, "save_reports"):
+                try:
+                    saved_report_path = str(
+                        await asyncio.to_thread(graph.save_reports, final_state, ticker)
+                    )
+                    logger.info(f"Successfully saved analysis reports to {saved_report_path}")
+                except Exception as rep_err:
+                    logger.warning(f"Failed to save reports to disk: {rep_err}")
 
             # Send final stats
             elapsed = time.time() - start_time
@@ -543,6 +556,7 @@ async def websocket_analysis_route(websocket: WebSocket):
             await emit("complete", {
                 "rating": rating,
                 "report": complete_report,
+                "report_path": saved_report_path,
                 "sections": report_sections,
             })
 
