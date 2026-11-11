@@ -42,7 +42,8 @@ function App() {
           <AnalysisDashboard 
             config={configHook.config} 
             wsHook={wsHook} 
-            onComplete={handleComplete} 
+            onComplete={handleComplete}
+            onRestart={handleRestart}
           />
         )}
 

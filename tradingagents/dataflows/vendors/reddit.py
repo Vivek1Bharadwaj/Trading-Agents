@@ -139,7 +139,8 @@ def _strip_html(content: str) -> str:
 # succeeds at 60s, so a shorter wait spends the one retry on a request that
 # cannot succeed (#1295). Jittered so several analyses sharing an IP don't
 # retry in lockstep and re-collide on the limit.
-_RETRY_FALLBACK_SECONDS = 60.0
+_RETRY_FALLBACK_SECONDS = 3.0
+_MAX_RETRY_WAIT_SECONDS = 5.0
 
 
 def _jitter(seconds: float, frac: float = 0.2) -> float:
@@ -149,18 +150,10 @@ def _jitter(seconds: float, frac: float = 0.2) -> float:
 
 
 def _retry_after_seconds(exc: HTTPError) -> float | None:
-    """Seconds to wait from a 429's ``Retry-After`` header, capped at 60s.
-
-    The cap matches ``_RETRY_FALLBACK_SECONDS``: honouring less than we would
-    wait on our own would spend the one retry on a request we already know is
-    too early.
-
-    Returns ``None`` only when the header is absent or unparseable; a valid
-    ``Retry-After: 0`` returns ``0.0`` (retry at once), not ``None``.
-    """
+    """Seconds to wait from a 429's ``Retry-After`` header, if present."""
     try:
         val = exc.headers.get("Retry-After") if getattr(exc, "headers", None) else None
-        return min(float(val), 60.0) if val is not None else None
+        return max(0.0, float(val)) if val is not None else None
     except (ValueError, TypeError, AttributeError):
         return None
 
@@ -207,10 +200,14 @@ def _fetch_subreddit_rss(
             root = ET.fromstring(_read_capped(resp))
     except HTTPError as exc:
         if exc.code == 429 and _retry:
-            # Honour a server-supplied Retry-After exactly (including 0); jitter
-            # only our own fallback so concurrent runs don't retry in lockstep.
             retry_after = _retry_after_seconds(exc)
-            wait = retry_after if retry_after is not None else _jitter(_RETRY_FALLBACK_SECONDS)
+            if retry_after is not None and retry_after > _MAX_RETRY_WAIT_SECONDS:
+                logger.warning(
+                    "Reddit RSS 429 for r/%s · %s (Retry-After=%.1fs > %.1fs cap); failing fast",
+                    sub, ticker, retry_after, _MAX_RETRY_WAIT_SECONDS,
+                )
+                return None
+            wait = retry_after if retry_after is not None else min(_jitter(_RETRY_FALLBACK_SECONDS), _MAX_RETRY_WAIT_SECONDS)
             logger.warning(
                 "Reddit RSS 429 for r/%s · %s — backing off %.1fs then retrying once",
                 sub, ticker, wait,

@@ -10,14 +10,21 @@ free-text generation and the rating is read from that text.
 
 from __future__ import annotations
 
+import logging
+
 from tradingagents.agents.context import (
+    extract_response_text,
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    trim_text,
 )
 from tradingagents.agents.rating import parse_rating
 from tradingagents.agents.schemas import PortfolioDecision, render_pm_decision
 from tradingagents.agents.structured import NO_EXTERNAL_TOOLS, bind_structured, invoke_structured
+from tradingagents.llm_clients.base_client import raise_if_fatal_llm_error
+
+logger = logging.getLogger(__name__)
 
 
 def create_portfolio_manager(llm):
@@ -27,12 +34,12 @@ def create_portfolio_manager(llm):
         instrument_context = get_instrument_context_from_state(state)
         portfolio_context = get_portfolio_context_from_state(state)
 
-        history = state["risk_debate_state"]["history"]
         risk_debate_state = state["risk_debate_state"]
-        research_plan = state["investment_plan"]
-        trader_plan = state["trader_investment_plan"]
+        history = trim_text(risk_debate_state.get("history", ""), max_chars=3500, keep_tail=True)
+        research_plan = trim_text(state.get("investment_plan", ""), max_chars=2500)
+        trader_plan = trim_text(state.get("trader_investment_plan", ""), max_chars=2500)
 
-        past_context = state.get("past_context", "")
+        past_context = trim_text(state.get("past_context", ""), max_chars=1500)
         lessons_line = (
             f"- Lessons from prior decisions and outcomes:\n{past_context}\n"
             if past_context
@@ -82,7 +89,23 @@ Write these sections, in this order, starting with the rating on its own line:
             final_trade_decision = render_pm_decision(decision)
             final_rating = decision.rating.value
         else:
-            final_trade_decision = llm.invoke(prompt).content
+            try:
+                response = llm.invoke(prompt)
+                final_trade_decision = extract_response_text(
+                    getattr(response, "content", response)
+                ).strip()
+                if not final_trade_decision:
+                    raise ValueError("empty Portfolio Manager response")
+            except Exception as exc:
+                raise_if_fatal_llm_error(exc)
+                logger.error("Portfolio Manager free-text fallback failed: %s", exc)
+                final_trade_decision = (
+                    "- **Rating**: Hold\n"
+                    f"- **Executive Summary**: Portfolio Manager synthesis failed ({exc}); "
+                    "defaulting to Hold pending review.\n"
+                    "- **Investment Thesis**: Review the completed analyst reports, research plan, "
+                    "and trader proposal directly."
+                )
             final_rating = parse_rating(final_trade_decision)
 
         new_risk_debate_state = {

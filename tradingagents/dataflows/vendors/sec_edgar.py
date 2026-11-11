@@ -217,6 +217,11 @@ def _statement(kind: str, ticker: str, freq: str, as_of_date: str, title: str) -
     if not periods:
         raise NoMarketDataError(ticker, ticker, f"no {freq} {title.lower()} filed by {as_of_date}")
 
+    # Cap statement history to recent reporting periods so token usage stays bounded.
+    max_periods = 8 if quarterly else 5
+    if len(periods) > max_periods:
+        periods = periods[-max_periods:]
+
     header = (
         f"# {title} for {ticker.upper()} ({freq}), USD in millions unless the row says otherwise\n"
         f"# SEC EDGAR facts filed on or before {as_of_date}, at the values filed then\n\n"

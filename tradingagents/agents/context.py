@@ -216,3 +216,29 @@ def get_portfolio_context_from_state(state: Mapping[str, Any]) -> str:
         "holdings or cash, so do not assume a flat book; give direction and "
         "sizing guidance in terms the caller can apply to their own position."
     )
+
+
+def trim_text(text: str | None, max_chars: int = 2500, *, keep_tail: bool = False) -> str:
+    """Bound large report/debate text so prompts stay within memory and token budgets."""
+    if not text:
+        return ""
+    if len(text) <= max_chars:
+        return text
+    if keep_tail:
+        return "...[Earlier turns omitted for brevity]\n" + text[-max_chars:]
+    return text[:max_chars] + "\n...[Report excerpted for efficiency]..."
+
+
+def extract_response_text(content: Any) -> str:
+    """Normalize LangChain message content (string or content-block list) to plain text."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        parts = []
+        for block in content:
+            if isinstance(block, str):
+                parts.append(block)
+            elif isinstance(block, dict) and block.get("text"):
+                parts.append(str(block["text"]))
+        return "\n".join(parts)
+    return str(content or "")

@@ -4,6 +4,8 @@ import json
 import logging
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from tradingagents.llm_clients.base_client import raise_if_fatal_llm_error
+
 logger = logging.getLogger(__name__)
 
 WRAP_UP = (
@@ -43,6 +45,7 @@ def take_turn(prompt, llm, tools, messages):
         result = (prompt | llm.bind_tools(tools)).invoke(messages)
         return result, "" if getattr(result, "tool_calls", None) else _normalize_str(result.content)
     except Exception as exc:
+        raise_if_fatal_llm_error(exc)
         logger.error("LLM error in analyst turn: %s", exc)
         fallback_content = f"Analysis report generated from available data. (Note: LLM encountered temporary error: {exc})"
         fallback_result = AIMessage(content=fallback_content)

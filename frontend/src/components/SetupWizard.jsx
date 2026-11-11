@@ -8,6 +8,8 @@ export default function SetupWizard({ configHook, onStart }) {
     const [models, setModels] = useState({ quick: [], deep: [] });
     const [providers, setProviders] = useState(FALLBACK_PROVIDERS);
     const [error, setError] = useState('');
+    const [customQuick, setCustomQuick] = useState(false);
+    const [customDeep, setCustomDeep] = useState(false);
 
     useEffect(() => {
         getProviders().then(data => {
@@ -205,39 +207,74 @@ export default function SetupWizard({ configHook, onStart }) {
                         )}
                     </div>
                 );
-            case 6:
+            case 6: {
+                const isCustomQuick = customQuick || (
+                    models.quick.length > 0 && Boolean(config.quickModel) && !models.quick.some(m => m.value === config.quickModel)
+                );
+                const isCustomDeep = customDeep || (
+                    models.deep.length > 0 && Boolean(config.deepModel) && !models.deep.some(m => m.value === config.deepModel)
+                );
                 return (
                     <div>
                         <h3>Step 6: Model Selection</h3>
                         <label className="label" style={{ marginTop: '1rem' }}>Quick-Thinking Model</label>
                         <select 
                             className="input-field" 
-                            value={config.quickModel}
-                            onChange={(e) => updateConfig('quickModel', e.target.value)}
+                            value={isCustomQuick ? 'custom' : config.quickModel}
+                            onChange={(e) => {
+                                if (e.target.value === 'custom') {
+                                    setCustomQuick(true);
+                                    updateConfig('quickModel', '');
+                                } else {
+                                    setCustomQuick(false);
+                                    updateConfig('quickModel', e.target.value);
+                                }
+                            }}
                         >
                             <option value="">Select a model...</option>
                             {models.quick.map(m => <option key={m.value} value={m.value}>{m.display}</option>)}
                             <option value="custom">Custom...</option>
                         </select>
-                        {config.quickModel === 'custom' && (
-                            <input className="input-field" style={{marginTop: '0.5rem'}} placeholder="Enter model ID" onChange={(e) => updateConfig('quickModel', e.target.value)} />
+                        {isCustomQuick && (
+                            <input
+                                className="input-field"
+                                style={{marginTop: '0.5rem'}}
+                                placeholder="Enter model ID"
+                                value={config.quickModel === 'custom' ? '' : config.quickModel}
+                                onChange={(e) => updateConfig('quickModel', e.target.value)}
+                            />
                         )}
 
                         <label className="label" style={{ marginTop: '1rem' }}>Deep-Thinking Model</label>
                         <select 
                             className="input-field" 
-                            value={config.deepModel}
-                            onChange={(e) => updateConfig('deepModel', e.target.value)}
+                            value={isCustomDeep ? 'custom' : config.deepModel}
+                            onChange={(e) => {
+                                if (e.target.value === 'custom') {
+                                    setCustomDeep(true);
+                                    updateConfig('deepModel', '');
+                                } else {
+                                    setCustomDeep(false);
+                                    updateConfig('deepModel', e.target.value);
+                                }
+                            }}
                         >
                             <option value="">Select a model...</option>
                             {models.deep.map(m => <option key={m.value} value={m.value}>{m.display}</option>)}
                             <option value="custom">Custom...</option>
                         </select>
-                        {config.deepModel === 'custom' && (
-                            <input className="input-field" style={{marginTop: '0.5rem'}} placeholder="Enter model ID" onChange={(e) => updateConfig('deepModel', e.target.value)} />
+                        {isCustomDeep && (
+                            <input
+                                className="input-field"
+                                style={{marginTop: '0.5rem'}}
+                                placeholder="Enter model ID"
+                                value={config.deepModel === 'custom' ? '' : config.deepModel}
+                                onChange={(e) => updateConfig('deepModel', e.target.value)}
+                            />
                         )}
                     </div>
                 );
+            }
             case 7:
                 return (
                     <div>

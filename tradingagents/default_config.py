@@ -114,9 +114,9 @@ def build_default_config() -> dict:
         # variation on models that honor it; reasoning models largely ignore it
         # and no setting makes LLM output bit-identical across runs (see README).
         "temperature": None,
-        # SDK retry budget forwarded to every provider chat client. Default to 3 with
-        # exponential backoff to handle rate limits without aborting.
+        # SDK retry & timeout budgets forwarded to provider chat clients.
         "llm_max_retries": 3,
+        "llm_timeout": 90,
         # Cap on output tokens forwarded to every provider chat client. None leaves
         # each provider at its own default. Set it to bound a model that emits
         # unbounded reasoning/output and hangs or trips a gateway idle timeout

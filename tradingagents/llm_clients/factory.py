@@ -122,6 +122,10 @@ def build_llm_kwargs(config: dict) -> dict[str, Any]:
     else:
         kwargs["max_retries"] = 3
 
+    timeout = config.get("llm_timeout")
+    if timeout is not None and timeout != "":
+        kwargs["timeout"] = float(timeout)
+
     # Output-token cap is cross-provider, but Gemini names it
     # ``max_output_tokens``; forward under the right key when set (#1204).
     max_tokens = config.get("max_tokens")

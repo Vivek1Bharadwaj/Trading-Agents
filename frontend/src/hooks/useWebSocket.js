@@ -17,6 +17,7 @@ export const useWebSocket = () => {
     const [reportSections, setReportSections] = useState({});
     const [stats, setStats] = useState({ llm_calls: 0, tool_calls: 0, tokens: { input: 0, output: 0 }, elapsed: 0 });
     const [isConnected, setIsConnected] = useState(false);
+    const [connectionState, setConnectionState] = useState('idle');
     const [rating, setRating] = useState(null);
     const [error, setError] = useState(null);
     const [isComplete, setIsComplete] = useState(false);
@@ -26,22 +27,38 @@ export const useWebSocket = () => {
 
     const connect = useCallback((config) => {
         setIsConnected(false);
+        setConnectionState('connecting');
         setError(null);
+        setRating(null);
         setMessages([]);
         setAgentStatuses({});
         setReportSections({});
+        setStats({ llm_calls: 0, tool_calls: 0, tokens: { input: 0, output: 0 }, elapsed: 0 });
         setIsComplete(false);
 
         if (pingRef.current) {
             clearInterval(pingRef.current);
             pingRef.current = null;
         }
+        if (wsRef.current) {
+            wsRef.current._manualClose = true;
+            try {
+                wsRef.current.close();
+            } catch (e) {
+                // ignore close errors on stale socket
+            }
+        }
 
         const ws = new WebSocket(getWsUrl());
+        ws._manualClose = false;
         wsRef.current = ws;
+
+        let completed = false;
+        let receivedError = false;
 
         ws.onopen = () => {
             setIsConnected(true);
+            setConnectionState('connected');
             
             // Client-side heartbeat ping every 15s to maintain active tunnel through proxies/Render
             pingRef.current = setInterval(() => {
@@ -79,6 +96,7 @@ export const useWebSocket = () => {
                 const payload = JSON.parse(event.data);
                 switch(payload.type) {
                     case 'status':
+                    case 'pong':
                         break;
                     case 'agent_update':
                         setAgentStatuses(prev => ({
@@ -100,11 +118,17 @@ export const useWebSocket = () => {
                         setStats(payload.data);
                         break;
                     case 'complete':
+                        completed = true;
+                        if (payload.data.sections) {
+                            setReportSections(prev => ({ ...prev, ...payload.data.sections }));
+                        }
                         setRating(payload.data.rating);
                         setIsComplete(true);
                         break;
                     case 'error':
-                        setError(payload.data.message);
+                        receivedError = true;
+                        setError(payload.data?.message || 'Analysis failed with an unexpected error.');
+                        setConnectionState('error');
                         break;
                     default:
                         break;
@@ -115,12 +139,28 @@ export const useWebSocket = () => {
         };
 
         ws.onerror = () => {
-            if (pingRef.current) clearInterval(pingRef.current);
-            setError("WebSocket Connection Error");
+            if (pingRef.current) {
+                clearInterval(pingRef.current);
+                pingRef.current = null;
+            }
+            if (!completed && !ws._manualClose) {
+                setError(prev => prev || "WebSocket connection failed. Verify the backend server is running.");
+                setConnectionState('error');
+            }
         };
-        ws.onclose = () => {
-            if (pingRef.current) clearInterval(pingRef.current);
+        ws.onclose = (event) => {
+            if (pingRef.current) {
+                clearInterval(pingRef.current);
+                pingRef.current = null;
+            }
             setIsConnected(false);
+            if (!completed && !ws._manualClose) {
+                setConnectionState(receivedError ? 'error' : 'disconnected');
+                if (!receivedError) {
+                    const reason = event?.reason ? ` (${event.reason})` : '';
+                    setError(prev => prev || `WebSocket connection closed unexpectedly${reason}.`);
+                }
+            }
         };
     }, []);
 
@@ -130,10 +170,13 @@ export const useWebSocket = () => {
             pingRef.current = null;
         }
         if (wsRef.current) {
+            wsRef.current._manualClose = true;
             wsRef.current.close();
             wsRef.current = null;
         }
+        setIsConnected(false);
+        setConnectionState('idle');
     }, []);
 
-    return { messages, agentStatuses, reportSections, stats, isConnected, rating, error, isComplete, connect, disconnect };
+    return { messages, agentStatuses, reportSections, stats, isConnected, connectionState, rating, error, isComplete, connect, disconnect };
 };

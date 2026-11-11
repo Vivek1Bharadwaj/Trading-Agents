@@ -16,6 +16,34 @@ class StatsCallbackHandler(BaseCallbackHandler):
         self.tool_calls = 0
         self.tokens_in = 0
         self.tokens_out = 0
+        self._warnings: list[str] = []
+        self._last_warn_msg = ""
+
+    def on_llm_error(self, error: BaseException, **kwargs: Any) -> None:
+        """Record transient provider errors so the UI live feed reflects retries."""
+        from tradingagents.llm_clients.base_client import classify_fatal_llm_error
+
+        if classify_fatal_llm_error(error):
+            return
+        err_str = str(error or "")
+        low = err_str.lower()
+        if "429" in err_str or "resource_exhausted" in low:
+            notice = "Provider rate limit (429) hit — retrying briefly..."
+        elif "503" in err_str or "unavailable" in low:
+            notice = "Provider experiencing high demand (503) — retrying briefly..."
+        else:
+            notice = f"Temporary LLM call issue ({type(error).__name__}); retrying/falling back..."
+        with self._lock:
+            if notice != self._last_warn_msg or len(self._warnings) == 0:
+                self._last_warn_msg = notice
+                self._warnings.append(notice)
+
+    def pop_warnings(self) -> list[str]:
+        """Drain queued transient warnings for the WebSocket stream."""
+        with self._lock:
+            items = list(self._warnings)
+            self._warnings.clear()
+            return items
 
     def on_llm_start(
         self,

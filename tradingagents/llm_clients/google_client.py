@@ -3,7 +3,7 @@ from typing import Any
 
 from langchain_google_genai import ChatGoogleGenerativeAI
 
-from .base_client import BaseLLMClient, normalize_content
+from .base_client import BaseLLMClient, FatalLLMError, classify_fatal_llm_error, normalize_content
 from .validators import validate_model
 
 _GEMINI_VERSION = re.compile(r"^gemini-(\d+)\.(\d+)")
@@ -28,11 +28,17 @@ class NormalizedChatGoogleGenerativeAI(ChatGoogleGenerativeAI):
     """
 
     def invoke(self, input, config=None, **kwargs):
-        return normalize_content(super().invoke(input, config, **kwargs))
+        try:
+            return normalize_content(super().invoke(input, config, **kwargs))
+        except Exception as exc:
+            fatal = classify_fatal_llm_error(exc)
+            if fatal:
+                raise FatalLLMError(fatal) from exc
+            raise
 
 
-# The read timeout the OpenAI and Anthropic SDKs use by default.
-REQUEST_TIMEOUT_SECONDS = 600
+# Bound per-call HTTP timeout so a stalled model request fails within 90s instead of 10m.
+REQUEST_TIMEOUT_SECONDS = 90
 
 
 class GoogleClient(BaseLLMClient):

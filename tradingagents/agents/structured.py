@@ -24,6 +24,9 @@ from typing import Any, TypeVar
 
 from pydantic import BaseModel
 
+from tradingagents.agents.context import extract_response_text
+from tradingagents.llm_clients.base_client import raise_if_fatal_llm_error
+
 logger = logging.getLogger(__name__)
 
 T = TypeVar("T", bound=BaseModel)
@@ -74,6 +77,7 @@ def invoke_structured(structured_llm: Any | None, prompt: Any, agent_name: str) 
             raise ValueError("structured output returned no parsed result")
         return result
     except Exception as exc:
+        raise_if_fatal_llm_error(exc)
         logger.warning(
             "%s: structured-output invocation failed (%s); retrying once as free text",
             agent_name, exc,
@@ -88,8 +92,22 @@ def invoke_structured_or_freetext(
     render: Callable[[T], str],
     agent_name: str,
 ) -> str:
-    """Run the structured call and render to markdown; fall back to free-text on any failure."""
+    """Run the structured call and render to markdown; fall back safely on any failure."""
     result = invoke_structured(structured_llm, prompt, agent_name)
     if result is not None:
         return render(result)
-    return plain_llm.invoke(prompt).content
+    try:
+        response = plain_llm.invoke(prompt)
+        text = extract_response_text(getattr(response, "content", response)).strip()
+        if text:
+            return text
+        raise ValueError("empty free-text response")
+    except Exception as exc:
+        raise_if_fatal_llm_error(exc)
+        logger.error("%s: free-text fallback also failed (%s)", agent_name, exc)
+        return (
+            f"## {agent_name} Summary (Fallback)\n\n"
+            f"- **Recommendation**: Hold\n"
+            f"- **Note**: {agent_name} synthesis encountered a model error ({exc}). "
+            "Proceeding using prior completed analysis sections."
+        )

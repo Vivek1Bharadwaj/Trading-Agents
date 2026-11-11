@@ -115,6 +115,9 @@ def _statement(ticker, freq, as_of_date, title, quarterly_attr, annual_attr) -> 
     data = yf_retry(lambda: getattr(yf.Ticker(canonical), attr))
     if data is None or data.empty:
         raise_for_empty(ticker, canonical, f"{what} data")
+    # Limit to the 6 most recent reporting periods to keep token/memory usage bounded.
+    if getattr(data, "shape", (0, 0))[1] > 6:
+        data = data.iloc[:, :6]
     return f"# {title} data for {canonical} ({freq})\n" + data.to_csv()
 
 
@@ -163,6 +166,8 @@ def get_insider_transactions(
             raise VendorUnavailableError("Yahoo Finance is unreachable; insider filings were not retrieved")
         return f"No insider transactions reported for symbol '{canonical}'"
 
+    # Keep the 25 most recent transactions to prevent excessive token bloat in prompts.
+    data = data.head(25)
     return f"# Insider Transactions data for {canonical}\n" + data.to_csv()
 
 

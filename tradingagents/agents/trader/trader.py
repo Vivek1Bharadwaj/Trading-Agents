@@ -8,6 +8,7 @@ from tradingagents.agents.context import (
     get_instrument_context_from_state,
     get_language_instruction,
     get_portfolio_context_from_state,
+    trim_text,
 )
 from tradingagents.agents.schemas import TraderProposal, render_trader_proposal
 from tradingagents.agents.structured import (
@@ -23,13 +24,13 @@ def create_trader(llm):
     def trader_node(state):
         company_name = state["company_of_interest"]
         instrument_context = get_instrument_context_from_state(state)
-        investment_plan = state["investment_plan"]
+        investment_plan = trim_text(state.get("investment_plan", ""), max_chars=3000)
         # The research plan digests the debate but loses exact price structure;
         # give the Trader the technical market report so entry/stop levels are
         # grounded in real ATR / support-resistance / current price (#1167). The
         # report is empty when the user did not select the market analyst, so
         # only offer it (and the grounding instruction) when it has content.
-        market_report = (state["market_report"] or "").strip()
+        market_report = trim_text((state.get("market_report") or "").strip(), max_chars=3000)
         portfolio_context = get_portfolio_context_from_state(state)
 
         if market_report:

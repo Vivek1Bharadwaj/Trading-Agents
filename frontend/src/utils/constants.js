@@ -13,9 +13,9 @@ export const ANALYSTS = [
 ];
 
 export const DEPTH_OPTIONS = [
-  { id: "shallow", label: "Shallow", desc: "Quick research, few debate rounds (1 round)" },
-  { id: "medium", label: "Medium", desc: "Moderate research, balanced debate (3 rounds)" },
-  { id: "deep", label: "Deep", desc: "Comprehensive research, thorough debate (5 rounds)" }
+  { id: "shallow", label: "Shallow", desc: "Quick research, lower quota usage (1 debate/risk round)" },
+  { id: "medium", label: "Medium", desc: "Balanced research (1 debate round, 2 risk rounds)" },
+  { id: "deep", label: "Deep", desc: "Comprehensive research (2 debate/risk rounds, 4 tool rounds)" }
 ];
 
 export const PROVIDERS = [

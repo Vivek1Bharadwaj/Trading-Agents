@@ -11,6 +11,7 @@ outcomes (a "Yes" at 0.76 means the market prices a 76% chance).
 """
 import json
 import logging
+import time
 from datetime import UTC, datetime
 
 import requests
@@ -21,8 +22,14 @@ logger = logging.getLogger(__name__)
 
 GAMMA_BASE = "https://gamma-api.polymarket.com"
 
-# Network timeout (seconds), consistent with the other vendors.
-REQUEST_TIMEOUT = 30
+# Fail fast on connect (4s) while allowing up to 10s read so blocked regions
+# do not stall downstream analysts for 30+ seconds per call.
+REQUEST_TIMEOUT = (4, 10)
+
+# Cooldown window (seconds) after a connect failure/timeout so subsequent calls
+# in the same process return immediately instead of hanging repeatedly.
+_UNREACHABLE_COOLDOWN_SECONDS = 300.0
+_UNREACHABLE_UNTIL = 0.0
 
 # Default number of markets to return, ranked by traded volume.
 DEFAULT_LIMIT = 6
@@ -92,9 +99,18 @@ def get_prediction_markets(topic: str, limit: int | None = None, as_of_date: str
     if limit is None:
         limit = DEFAULT_LIMIT
 
+    global _UNREACHABLE_UNTIL
+    if time.monotonic() < _UNREACHABLE_UNTIL:
+        return (
+            "Polymarket data is currently unavailable (endpoint unreachable in this environment). "
+            f"Proceed without prediction-market signal for '{topic}'."
+        )
+
     try:
         data = _request("public-search", {"q": topic, "limit_per_type": 20})
     except requests.RequestException as e:
+        if isinstance(e, (requests.ConnectTimeout, requests.ConnectionError)):
+            _UNREACHABLE_UNTIL = time.monotonic() + _UNREACHABLE_COOLDOWN_SECONDS
         logger.warning("Polymarket search failed for %r: %s", topic, e)
         return (
             f"Polymarket data is currently unavailable (network error: {e}). "

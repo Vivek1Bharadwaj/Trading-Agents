@@ -103,6 +103,9 @@ def _analyst_graph(spec, agent, max_tool_rounds: int):
                 res[spec.report_key] = f"Completed {spec.agent_node} analysis from available data."
             return res
         except Exception as e:
+            from tradingagents.llm_clients.base_client import raise_if_fatal_llm_error
+
+            raise_if_fatal_llm_error(e)
             logger.error("Error during %s wrap_up: %s", spec.agent_node, e)
             return {
                 "messages": [HumanMessage(content=f"Report concluded from collected data ({e}).")],

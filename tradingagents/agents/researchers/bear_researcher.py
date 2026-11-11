@@ -1,36 +1,31 @@
 import logging
 from tradingagents.agents.context import (
+    extract_response_text,
     get_instrument_context_from_state,
     get_language_instruction,
     opponent_argument_or_opening,
     report_or_absent,
+    trim_text,
 )
+from tradingagents.llm_clients.base_client import raise_if_fatal_llm_error
 
 logger = logging.getLogger(__name__)
-
-
-def _trim_text(text: str, max_chars: int = 2500) -> str:
-    """Trim large text dumps to prevent token explosion and OOM on memory-limited hosts."""
-    if not text:
-        return ""
-    if len(text) <= max_chars:
-        return text
-    return text[:max_chars] + "\n...[Report excerpted for debate efficiency]..."
 
 
 def create_bear_researcher(llm):
     def bear_node(state) -> dict:
         investment_debate_state = state.get("investment_debate_state") or {}
-        history = _trim_text(investment_debate_state.get("history", ""), max_chars=3000)
+        raw_history = investment_debate_state.get("history", "")
+        history = trim_text(raw_history, max_chars=3000, keep_tail=True)
         bear_history = investment_debate_state.get("bear_history", "")
 
         current_response = opponent_argument_or_opening(
             investment_debate_state.get("current_response", ""), "bull analyst"
         )
-        market_research_report = _trim_text(report_or_absent(state.get("market_report"), "market"))
-        sentiment_report = _trim_text(report_or_absent(state.get("sentiment_report"), "sentiment"))
-        news_report = _trim_text(report_or_absent(state.get("news_report"), "news"))
-        fundamentals_report = _trim_text(report_or_absent(state.get("fundamentals_report"), "fundamentals"))
+        market_research_report = trim_text(report_or_absent(state.get("market_report"), "market"))
+        sentiment_report = trim_text(report_or_absent(state.get("sentiment_report"), "sentiment"))
+        news_report = trim_text(report_or_absent(state.get("news_report"), "news"))
+        fundamentals_report = trim_text(report_or_absent(state.get("fundamentals_report"), "fundamentals"))
         instrument_context = get_instrument_context_from_state(state)
         asset_type = state.get("asset_type", "stock")
         target_label = "stock" if asset_type == "stock" else "asset"
@@ -62,10 +57,11 @@ Use this information to deliver a compelling bear argument, refute the bull's cl
 
         try:
             response = llm.invoke(prompt)
-            content = response.content if isinstance(response.content, str) else str(response.content)
+            content = extract_response_text(getattr(response, "content", response))
             if not content.strip():
                 content = "Downside risks, macro headwinds, and valuation vulnerability warrant a defensive bear thesis."
         except Exception as e:
+            raise_if_fatal_llm_error(e)
             logger.error("Bear researcher invoke error: %s", e)
             content = "Defensive stance maintained highlighting downside risks and macro headwinds."
 
@@ -73,8 +69,8 @@ Use this information to deliver a compelling bear argument, refute the bull's cl
         prev_count = investment_debate_state.get("count", 0)
 
         new_investment_debate_state = {
-            "history": (history + "\n" + argument).strip(),
-            "bear_history": (bear_history + "\n" + argument).strip(),
+            "history": trim_text((raw_history + "\n" + argument).strip(), max_chars=6000, keep_tail=True),
+            "bear_history": trim_text((bear_history + "\n" + argument).strip(), max_chars=4000, keep_tail=True),
             "bull_history": investment_debate_state.get("bull_history", ""),
             "current_response": argument,
             "count": prev_count + 1,
