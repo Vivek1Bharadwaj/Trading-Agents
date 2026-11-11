@@ -154,6 +154,12 @@ async def websocket_analysis_route(websocket: WebSocket):
             args = graph.propagator.get_graph_args(callbacks=[stats_handler])
             args["stream_mode"] = ["values", "tasks"]
             args["subgraphs"] = True
+            
+            # >>> START NEW CODE: Inject Recursion Limit <<<
+            if "config" not in args or not args["config"]:
+                args["config"] = {}
+            args["config"]["recursion_limit"] = 25 
+            # >>> END NEW CODE <<<
 
             from tradingagents.dataflows.config import run_config_context
             context = run_config_context(config)
@@ -218,6 +224,13 @@ async def websocket_analysis_route(websocket: WebSocket):
                             "The free-tier quota for this model was reached. "
                             "Try choosing Gemini 2.0 Flash or Gemini 1.5 Flash in the setup wizard, or try again shortly."
                         )
+                    # >>> START NEW CODE: Catch Recursion Error <<<
+                    elif "RecursionError" in err_msg or "recursion limit" in err_msg.lower():
+                        err_msg = (
+                            "Agentic Loop Detected: An agent failed to resolve a task and hit the maximum step limit (25). "
+                            "Analysis halted to prevent server crash."
+                        )
+                    # >>> END NEW CODE <<<
                     await _send(websocket, "error", {"message": err_msg, "trace": tb})
                     return
                 elif kind == "step":
