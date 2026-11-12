@@ -15,6 +15,7 @@ class AnalysisRequest(BaseModel):
     google_thinking_level: Optional[str] = None
     openai_reasoning_effort: Optional[str] = None
     anthropic_effort: Optional[str] = None
+    run_id: Optional[str] = None
 
 class AnalysisUpdate(BaseModel):
     type: str  # "status"|"agent_update"|"report"|"error"|"complete"

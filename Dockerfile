@@ -35,7 +35,8 @@ RUN pip install --no-cache-dir .
 FROM python:3.13-slim
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
-    PYTHONUNBUFFERED=1
+    PYTHONUNBUFFERED=1 \
+    MALLOC_ARENA_MAX=2
 
 COPY --from=builder /opt/venv /opt/venv
 
@@ -52,4 +53,4 @@ COPY --from=builder --chown=appuser:appuser /build .
 
 COPY --from=frontend-builder --chown=appuser:appuser /frontend/dist ./frontend/dist
 
-CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-10000}"]
+CMD ["sh", "-c", "uvicorn backend.main:app --host 0.0.0.0 --port ${PORT:-10000} --ws-ping-interval 25 --ws-ping-timeout 90 --timeout-keep-alive 75 --proxy-headers --forwarded-allow-ips '*'"]

@@ -2,8 +2,9 @@ import axios from 'axios';
 import { PROVIDERS } from './constants';
 
 const getBaseUrl = () => {
-    if (import.meta.env.VITE_API_URL) {
-        return import.meta.env.VITE_API_URL;
+    const apiUrl = (import.meta.env.VITE_API_URL || '').trim().replace(/\/+$/, '');
+    if (apiUrl) {
+        return apiUrl;
     }
     // When served from the backend (e.g. Render, production, or local host)
     if (typeof window !== 'undefined' && window.location && window.location.origin) {

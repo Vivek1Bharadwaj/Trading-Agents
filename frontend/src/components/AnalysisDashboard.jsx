@@ -48,7 +48,7 @@ export default function AnalysisDashboard({ config, wsHook, onComplete, onRestar
             };
         }
         return {
-            label: 'Connecting...',
+            label: connectionState === 'reconnecting' ? 'Reconnecting...' : 'Connecting...',
             bg: 'rgba(245, 158, 11, 0.1)',
             color: '#f59e0b',
             border: '#f59e0b',

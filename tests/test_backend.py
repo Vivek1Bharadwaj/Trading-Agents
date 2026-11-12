@@ -147,3 +147,122 @@ def test_websocket_analysis_flow(client):
             assert complete_data is not None
             assert complete_data["report_path"] == "/fake/report/complete_report.md"
             assert mock_graph.save_reports.called
+
+
+def test_websocket_resume_missing_session(client):
+    with client.websocket_connect("/ws/analysis") as ws:
+        ws.send_json({"action": "resume", "run_id": "missing-run-id", "last_seq": 0})
+        msg = ws.receive_json()
+        assert msg["type"] == "error"
+        assert "expired" in msg["data"]["message"].lower()
+
+
+def test_websocket_resume_after_disconnect(client):
+    import threading
+    import time
+
+    step_gate = threading.Event()
+    mock_graph = mock.MagicMock()
+    mock_graph.create_run_state.return_value = {"company_of_interest": "AAPL", "trade_date": "2025-01-01"}
+    mock_graph.propagator.get_graph_args.return_value = {"stream_mode": "values", "config": {"recursion_limit": 100}}
+    mock_graph.propagator.max_recur_limit = 100
+    mock_graph.save_reports.return_value = "/fake/report/complete_report.md"
+
+    def dummy_stream(*args, **kwargs):
+        yield ((), "values", {
+            "company_of_interest": "AAPL",
+            "trade_date": "2025-01-01",
+            "investment_plan": "Plan phase 1",
+        })
+        step_gate.wait(timeout=5.0)
+        yield ((), "values", {
+            "company_of_interest": "AAPL",
+            "trade_date": "2025-01-01",
+            "final_trade_decision": "BUY AAPL",
+        })
+
+    mock_graph.graph.stream = dummy_stream
+    run_id = "resume-test-run-1"
+    last_seq = 0
+    first_seen = []
+
+    with mock.patch("tradingagents.graph.trading_graph.TradingAgentsGraph", return_value=mock_graph):
+        with client.websocket_connect("/ws/analysis") as ws1:
+            ws1.send_json({
+                "ticker": "AAPL",
+                "analysis_date": "2025-01-01",
+                "output_language": "English",
+                "analysts": ["market"],
+                "research_depth": "shallow",
+                "llm_provider": "openai",
+                "quick_think_llm": "gpt-4o-mini",
+                "deep_think_llm": "gpt-4o",
+                "api_key": "fake_key",
+                "run_id": run_id,
+            })
+            while True:
+                msg = ws1.receive_json()
+                if isinstance(msg.get("seq"), int):
+                    last_seq = max(last_seq, msg["seq"])
+                    first_seen.append(msg["seq"])
+                if msg["type"] == "report_section" and msg["data"]["section"] == "investment_plan":
+                    break
+
+        step_gate.set()
+        time.sleep(0.15)
+
+        resumed_msgs = []
+        with client.websocket_connect("/ws/analysis") as ws2:
+            ws2.send_json({"action": "resume", "run_id": run_id, "last_seq": last_seq})
+            while True:
+                msg = ws2.receive_json()
+                resumed_msgs.append(msg)
+                if msg["type"] in ("complete", "error"):
+                    break
+
+        complete = [m for m in resumed_msgs if m["type"] == "complete"]
+        assert len(complete) == 1, f"Expected complete on resume, got {resumed_msgs}"
+        assert complete[0]["data"]["sections"]["investment_plan"] == "Plan phase 1"
+        assert complete[0]["data"]["sections"]["final_decision"] == "BUY AAPL"
+        assert all(m["seq"] > last_seq for m in resumed_msgs if "seq" in m)
+        assert not any(m["seq"] in first_seen for m in resumed_msgs if "seq" in m)
+
+
+def test_websocket_cancel_stops_session(client):
+    import threading
+    from backend import ws_handler
+
+    gate = threading.Event()
+    mock_graph = mock.MagicMock()
+    mock_graph.create_run_state.return_value = {"company_of_interest": "AAPL", "trade_date": "2025-01-01"}
+    mock_graph.propagator.get_graph_args.return_value = {"stream_mode": "values", "config": {"recursion_limit": 100}}
+    mock_graph.propagator.max_recur_limit = 100
+
+    def blocking_stream(*args, **kwargs):
+        gate.wait(timeout=3.0)
+        yield ((), "values", {"final_trade_decision": "BUY"})
+
+    mock_graph.graph.stream = blocking_stream
+    run_id = "cancel-test-run-1"
+
+    with mock.patch("tradingagents.graph.trading_graph.TradingAgentsGraph", return_value=mock_graph):
+        with client.websocket_connect("/ws/analysis") as ws:
+            ws.send_json({
+                "ticker": "AAPL",
+                "analysis_date": "2025-01-01",
+                "output_language": "English",
+                "analysts": ["market"],
+                "research_depth": "shallow",
+                "llm_provider": "openai",
+                "quick_think_llm": "gpt-4o-mini",
+                "deep_think_llm": "gpt-4o",
+                "api_key": "fake_key",
+                "run_id": run_id,
+            })
+            ws.receive_json()
+            sess = ws_handler._get_session(run_id)
+            assert sess is not None
+            ws.send_json({"type": "cancel"})
+
+        gate.set()
+        assert sess.cancel_event.is_set()
